@@ -5,6 +5,18 @@ const responseRefs = {
   429: { $ref: '#/components/responses/RateLimited' },
 };
 
+export const sessionLimitResponse = {
+  description: 'Maximum active session limit reached',
+  content: {
+    'application/json': {
+      example: {
+        success: false,
+        error: 'Maximum of 5 active sessions reached for this API key. Please log out or wait for an existing session to expire before creating a new one.',
+      },
+    },
+  },
+};
+
 const jsonBody = (schema) => ({
   required: true,
   content: { 'application/json': { schema: { $ref: `#/components/schemas/${schema}` } } },
@@ -27,7 +39,7 @@ export const messageOperation = (summary, schema) => ({
 
 export const sessionOperation = (summary, options = {}) => {
   const {
-    successStatus = 200, successExample, successSchema, ...operation
+    successStatus = 200, successExample, successSchema, responses = {}, ...operation
   } = options;
   const successContent = {
     example: successExample ?? { sessionId: '42-V1StGXR8', status: 'connected', qr: null },
@@ -42,6 +54,7 @@ export const sessionOperation = (summary, options = {}) => {
     responses: {
       [successStatus]: { description: 'Session operation completed', content: { 'application/json': successContent } },
       ...responseRefs,
+      ...responses,
     },
   };
 };

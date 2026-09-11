@@ -1,12 +1,15 @@
 import { z } from 'zod';
 import pino from 'pino';
 import {
+  countActiveSessions,
   createSession,
   createSessionWithPairingCode,
   generateSessionId,
   getSessionStatus,
   listSessions,
   logoutSession,
+  MAX_ACTIVE_SESSIONS,
+  SessionLimitError,
   SessionOwnershipError,
   waitForSessionReady,
 } from '../services/sessionManager.js';
@@ -31,11 +34,22 @@ function sendError(response, error) {
   if (error instanceof SessionOwnershipError) {
     return response.status(403).json({ error: error.message });
   }
-  if (error.message === 'Session not found') {
-    return response.status(404).json({ error: error.message });
+  if (error instanceof SessionLimitError) {
+    return response.status(400).json({ success: false, error: error.message });
   }
-  if (error.message.includes('Timed out')) {
-    return response.status(504).json({ error: error.message });
+  const message = typeof error?.message === 'string' ? error.message : '';
+  if (message === 'Session not found') {
+    return response.status(404).json({ error: message });
+  }
+  const upstreamStatus = error?.output?.statusCode ?? error?.statusCode;
+  if (message.includes('Timed out') || upstreamStatus === 408) {
+    return response.status(504).json({ error: message || 'WhatsApp request timed out' });
+  }
+  if (upstreamStatus === 428 || upstreamStatus === 503) {
+    logger.warn({ error }, 'WhatsApp connection unavailable');
+    return response.status(503).json({
+      error: 'WhatsApp connection unavailable. Retry the session request.',
+    });
   }
   logger.error({ error }, 'Session operation failed');
   return response.status(500).json({ error: 'Session operation failed' });
@@ -73,8 +87,12 @@ export async function startPairingSession(request, response) {
 
 export async function readSessionList(request, response) {
   try {
-    const sessions = await listSessions(request.apiKey.id);
-    return response.json({ sessions });
+    const apiKeyId = request.apiKey.id;
+    const [sessions, activeCount] = await Promise.all([
+      listSessions(apiKeyId),
+      countActiveSessions(apiKeyId),
+    ]);
+    return response.json({ sessions, activeCount, maxAllowed: MAX_ACTIVE_SESSIONS });
   } catch (error) {
     return sendError(response, error);
   }

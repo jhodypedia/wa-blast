@@ -18,7 +18,7 @@ export function createTelegramBot({
   }
 
   const bot = new Bot(token);
-  const context = { adminIds, logger };
+  const context = { adminIds, logger, conversationStates: new Map() };
   registerStartHandler(bot, context);
   registerApiKeyHandlers(bot, context);
   bot.catch((error, context) => {

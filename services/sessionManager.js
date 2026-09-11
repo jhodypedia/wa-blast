@@ -12,6 +12,10 @@ import { pool } from '../config/database.js';
 
 const logger = pino().child({ service: 'session-manager' });
 const sessions = new Map();
+export const MAX_ACTIVE_SESSIONS = 5;
+export const SESSION_AUTH_TIMEOUT_MS = 60000;
+export const SESSION_LIMIT_MESSAGE = 'Maximum of 5 active sessions reached for this API key. Please log out or wait for an existing session to expire before creating a new one.';
+const ACTIVE_SESSION_STATUSES = ['qr_pending', 'pairing_pending', 'connected'];
 const sessionsRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -22,6 +26,13 @@ export class SessionOwnershipError extends Error {
   constructor() {
     super('Session belongs to a different API key');
     this.name = 'SessionOwnershipError';
+  }
+}
+
+export class SessionLimitError extends Error {
+  constructor() {
+    super(SESSION_LIMIT_MESSAGE);
+    this.name = 'SessionLimitError';
   }
 }
 
@@ -44,6 +55,24 @@ export async function generateSessionId(apiKeyId, database = pool) {
       return sessionId;
     }
   }
+}
+
+export function getSessionAuthPath(sessionId, apiKeyId) {
+  validateSessionId(sessionId);
+  const ownerId = String(apiKeyId);
+  const prefix = `${ownerId}-`;
+  const suffix = sessionId.startsWith(prefix) ? sessionId.slice(prefix.length) : sessionId;
+  return path.join(sessionsRoot, ownerId, suffix);
+}
+
+export async function countActiveSessions(apiKeyId, database = pool) {
+  const [rows] = await database.execute(
+    `SELECT COUNT(*) AS active_count
+     FROM sessions
+     WHERE api_key_id = ? AND status IN (?, ?, ?)`,
+    [String(apiKeyId), ...ACTIVE_SESSION_STATUSES],
+  );
+  return Number(rows[0]?.active_count ?? 0);
 }
 
 function getDisconnectStatusCode(error) {
@@ -78,7 +107,7 @@ function notifyReady(record, error = null) {
 }
 
 async function connect(record) {
-  const authPath = path.join(sessionsRoot, record.sessionId);
+  const authPath = getSessionAuthPath(record.sessionId, record.apiKeyId);
   const { state, saveCreds } = await useMultiFileAuthState(authPath);
   const socket = makeWASocket({
     auth: state,
@@ -106,6 +135,8 @@ async function connect(record) {
       }
 
       if (connection === 'open') {
+        clearTimeout(record.expireTimer);
+        record.expireTimer = null;
         record.status = 'connected';
         record.qrCode = null;
         record.pairingCode = null;
@@ -120,6 +151,8 @@ async function connect(record) {
         const loggedOut = statusCode === DisconnectReason.loggedOut;
 
         if (record.manualLogout || loggedOut) {
+          clearTimeout(record.expireTimer);
+          record.expireTimer = null;
           record.status = 'logged_out';
           await updateStatus(record.sessionId, record.apiKeyId, record.status);
           notifyReady(record, new Error('WhatsApp session was logged out'));
@@ -136,6 +169,31 @@ async function connect(record) {
   });
 
   return socket;
+}
+
+async function expirePendingSession(record) {
+  record.expireTimer = null;
+  if (sessions.get(record.sessionId) !== record || record.manualLogout || record.status === 'connected') {
+    return;
+  }
+
+  record.manualLogout = true;
+  record.status = 'expired';
+  clearTimeout(record.reconnectTimer);
+  sessions.delete(record.sessionId);
+  notifyReady(record, new Error('Session authentication expired'));
+  record.socket?.cancelPairingCode?.();
+  await record.socket?.end(new Error('Session authentication expired')).catch(() => {});
+  await rm(getSessionAuthPath(record.sessionId, record.apiKeyId), { recursive: true, force: true });
+  await updateStatus(record.sessionId, record.apiKeyId, 'expired');
+}
+
+function scheduleExpiration(record) {
+  record.expireTimer = setTimeout(() => {
+    expirePendingSession(record).catch((error) => {
+      logger.error({ error, sessionId: record.sessionId }, 'Session expiration failed');
+    });
+  }, SESSION_AUTH_TIMEOUT_MS);
 }
 
 async function waitForSocketOpen(record, timeoutMs = 15000) {
@@ -183,6 +241,7 @@ async function createSessionRecord(sessionId, apiKeyId, connectionMethod, label 
     if (existing.status === 'disconnected' || existing.status === 'logged_out') {
       existing.manualLogout = true;
       clearTimeout(existing.reconnectTimer);
+      clearTimeout(existing.expireTimer);
       await existing.socket?.end(new Error('Session authentication restarted'));
       sessions.delete(sessionId);
       existing = null;
@@ -195,22 +254,36 @@ async function createSessionRecord(sessionId, apiKeyId, connectionMethod, label 
     return existing;
   }
 
-  const [owners] = await pool.execute(
-    'SELECT api_key_id FROM sessions WHERE session_name = ? LIMIT 1',
-    [sessionId],
-  );
-  if (owners.length > 0 && String(owners[0].api_key_id) !== ownerId) {
-    throw new SessionOwnershipError();
-  }
-
   const initialStatus = connectionMethod === 'qr' ? 'qr_pending' : 'pairing_pending';
-  await pool.execute(
-    `INSERT INTO sessions (session_name, api_key_id, label, connection_method, status)
-     VALUES (?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE connection_method = VALUES(connection_method),
-       label = VALUES(label), status = VALUES(status), updated_at = CURRENT_TIMESTAMP`,
-    [sessionId, ownerId, label, connectionMethod, initialStatus],
-  );
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute('SELECT id FROM api_keys WHERE id = ? FOR UPDATE', [ownerId]);
+    const [owners] = await connection.execute(
+      'SELECT api_key_id FROM sessions WHERE session_name = ? LIMIT 1',
+      [sessionId],
+    );
+    if (owners.length > 0 && String(owners[0].api_key_id) !== ownerId) {
+      throw new SessionOwnershipError();
+    }
+    if (owners.length === 0 && await countActiveSessions(ownerId, connection) >= MAX_ACTIVE_SESSIONS) {
+      throw new SessionLimitError();
+    }
+
+    await connection.execute(
+      `INSERT INTO sessions (session_name, api_key_id, label, connection_method, status)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE connection_method = VALUES(connection_method),
+         label = VALUES(label), status = VALUES(status), updated_at = CURRENT_TIMESTAMP`,
+      [sessionId, ownerId, label, connectionMethod, initialStatus],
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 
   const record = {
     sessionId,
@@ -223,14 +296,17 @@ async function createSessionRecord(sessionId, apiKeyId, connectionMethod, label 
     manualLogout: false,
     reconnectAttempts: 0,
     reconnectTimer: null,
+    expireTimer: null,
     readyWaiters: new Set(),
   };
   sessions.set(sessionId, record);
+  scheduleExpiration(record);
 
   try {
     await connect(record);
     return record;
   } catch (error) {
+    clearTimeout(record.expireTimer);
     sessions.delete(sessionId);
     await updateStatus(sessionId, ownerId, 'disconnected');
     throw error;
@@ -264,10 +340,11 @@ export async function createSessionWithPairingCode(
   } catch (error) {
     record.manualLogout = true;
     clearTimeout(record.reconnectTimer);
+    clearTimeout(record.expireTimer);
     record.socket?.cancelPairingCode?.();
     await record.socket?.end(error).catch(() => {});
     sessions.delete(sessionId);
-    await rm(path.join(sessionsRoot, sessionId), { recursive: true, force: true });
+    await rm(getSessionAuthPath(sessionId, apiKeyId), { recursive: true, force: true });
     await updateStatus(sessionId, apiKeyId, 'disconnected').catch((statusError) => {
       logger.warn({ error: statusError, sessionId }, 'Pairing failure status update failed');
     });
@@ -367,6 +444,7 @@ export async function logoutSession(sessionId, apiKeyId) {
   if (record?.apiKeyId === ownerId) {
     record.manualLogout = true;
     clearTimeout(record.reconnectTimer);
+    clearTimeout(record.expireTimer);
     try {
       await record.socket?.logout('API-requested logout');
     } catch (error) {
@@ -377,7 +455,7 @@ export async function logoutSession(sessionId, apiKeyId) {
     sessions.delete(sessionId);
   }
 
-  await rm(path.join(sessionsRoot, sessionId), { recursive: true, force: true });
+  await rm(getSessionAuthPath(sessionId, ownerId), { recursive: true, force: true });
   await updateStatus(sessionId, ownerId, 'logged_out');
 
   if (logoutError) {

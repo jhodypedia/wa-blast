@@ -1,9 +1,16 @@
 import { validateApiKey } from '../services/apiKeyService.js';
 
+const LEGACY_API_KEY_PATTERN = /^[A-Za-z0-9_-]{32}$/;
+const PREFIXED_API_KEY_PATTERN = /^ps-[A-Za-z0-9_-]{32}$/;
+
 export async function apiKeyAuth(request, response, next) {
   try {
     const rawKey = request.get('x-api-key');
     if (!rawKey) {
+      return response.status(401).json({ error: 'A valid x-api-key header is required' });
+    }
+
+    if (!PREFIXED_API_KEY_PATTERN.test(rawKey) && !LEGACY_API_KEY_PATTERN.test(rawKey)) {
       return response.status(401).json({ error: 'A valid x-api-key header is required' });
     }
 

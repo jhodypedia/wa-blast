@@ -15,6 +15,16 @@ const verifications = {
       throw new Error('sessions.label must be VARCHAR(100) NULL');
     }
   },
+  '004_add_expired_session_status.sql': async () => {
+    const [rows] = await pool.execute(
+      `SELECT COLUMN_TYPE
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sessions' AND COLUMN_NAME = 'status'`,
+    );
+    if (rows.length !== 1 || !rows[0].COLUMN_TYPE.toLowerCase().includes("'expired'")) {
+      throw new Error('sessions.status must support expired');
+    }
+  },
 };
 
 if (!migrationPath) {

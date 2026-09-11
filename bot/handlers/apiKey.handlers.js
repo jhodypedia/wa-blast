@@ -4,12 +4,12 @@ import {
   revokeApiKey,
   setRateLimit,
 } from '../../services/apiKeyService.js';
-import { handleCommand } from './commandUtils.js';
-
-const TELEGRAM_MESSAGE_LIMIT = 3900;
+import { handleCommand, isAdmin } from './commandUtils.js';
+import { MAIN_MENU_BUTTON_OPTIONS, MAIN_MENU_REPLY_OPTIONS } from './start.handler.js';
 
 function maskKey(key) {
-  return `${key.slice(0, 4)}${'*'.repeat(Math.max(0, key.length - 8))}${key.slice(-4)}`;
+  const visibleStartLength = key.startsWith('ps-') ? 7 : 4;
+  return `${key.slice(0, visibleStartLength)}${'*'.repeat(Math.max(0, key.length - visibleStartLength - 4))}${key.slice(-4)}`;
 }
 
 function formatCreatedAt(value) {
@@ -29,22 +29,158 @@ function formatApiKey(apiKey) {
 
 async function sendKeyList(context, apiKeys) {
   if (apiKeys.length === 0) {
-    await context.reply('No API keys found.');
+    await context.reply('No API keys found.', MAIN_MENU_BUTTON_OPTIONS);
     return;
   }
 
-  let message = 'API keys:\n\n';
   for (const apiKey of apiKeys) {
-    const block = `${formatApiKey(apiKey)}\n\n`;
-    if (message.length + block.length > TELEGRAM_MESSAGE_LIMIT) {
-      await context.reply(message.trimEnd());
-      message = '';
-    }
-    message += block;
+    const replyOptions = apiKey.isActive
+      ? {
+          reply_markup: {
+            inline_keyboard: [[{
+              text: '🔴 Revoke',
+              callback_data: `revoke_${apiKey.id}`,
+            }]],
+          },
+        }
+      : undefined;
+    await context.reply(formatApiKey(apiKey), replyOptions);
+  }
+  await context.reply('Choose another action:', MAIN_MENU_BUTTON_OPTIONS);
+}
+
+function keyButtonText(prefix, apiKey) {
+  const label = apiKey.label.length > 40 ? `${apiKey.label.slice(0, 37)}...` : apiKey.label;
+  return `${prefix} ${apiKey.id}: ${label}`;
+}
+
+async function sendKeyPicker(context, apiKeys, action) {
+  const activeKeys = apiKeys.filter((apiKey) => apiKey.isActive);
+  if (activeKeys.length === 0) {
+    await context.reply('No active API keys found.', MAIN_MENU_BUTTON_OPTIONS);
+    return;
   }
 
-  if (message) {
-    await context.reply(message.trimEnd());
+  const prefix = action === 'revoke' ? '🔴' : '⚙️';
+  await context.reply(
+    action === 'revoke' ? 'Select an API key to revoke:' : 'Select an API key to update:',
+    {
+      reply_markup: {
+        inline_keyboard: [
+          ...activeKeys.map((apiKey) => [{
+            text: keyButtonText(prefix, apiKey),
+            callback_data: `${action}_${apiKey.id}`,
+          }]),
+          [{ text: '🏠 Main Menu', callback_data: 'menu_main' }],
+        ],
+      },
+    },
+  );
+}
+
+async function showMainMenu(context, conversationStates) {
+  conversationStates.delete(String(context.chatId));
+  await context.reply('API key administration:', MAIN_MENU_REPLY_OPTIONS);
+}
+
+async function handleCallbackAction(telegramContext, conversationStates) {
+  const data = telegramContext.callbackQuery?.data ?? '';
+  const chatId = String(telegramContext.chatId);
+
+  if (data === 'menu_main') {
+    await showMainMenu(telegramContext, conversationStates);
+    return;
+  }
+  if (data === 'menu_generate') {
+    conversationStates.set(chatId, { step: 'waiting_label' });
+    await telegramContext.reply('Reply with a label for the new API key.', {
+      reply_markup: { force_reply: true },
+    });
+    return;
+  }
+  if (data === 'menu_list') {
+    await sendKeyList(telegramContext, await listApiKeys());
+    return;
+  }
+  if (data === 'menu_revoke') {
+    await sendKeyPicker(telegramContext, await listApiKeys(), 'revoke');
+    return;
+  }
+  if (data === 'menu_setlimit') {
+    await sendKeyPicker(telegramContext, await listApiKeys(), 'setlimit');
+    return;
+  }
+
+  const revokeMatch = /^revoke_(\d+)$/.exec(data);
+  if (revokeMatch) {
+    const keyId = parsePositiveInteger(revokeMatch[1], 'keyId');
+    await telegramContext.reply(`Revoke API key ${keyId}?`, {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Confirm', callback_data: `confirm_revoke_${keyId}` },
+          { text: '⬅️ Cancel', callback_data: 'menu_list' },
+        ]],
+      },
+    });
+    return;
+  }
+
+  const confirmMatch = /^confirm_revoke_(\d+)$/.exec(data);
+  if (confirmMatch) {
+    const keyId = parsePositiveInteger(confirmMatch[1], 'keyId');
+    const revoked = await revokeApiKey(keyId);
+    if (!revoked) {
+      throw new TypeError(`API key ${keyId} was not found or was already revoked`);
+    }
+    conversationStates.delete(chatId);
+    await telegramContext.reply(`API key ${keyId} revoked.`, MAIN_MENU_BUTTON_OPTIONS);
+    return;
+  }
+
+  const setLimitMatch = /^setlimit_(\d+)$/.exec(data);
+  if (setLimitMatch) {
+    const keyId = parsePositiveInteger(setLimitMatch[1], 'keyId');
+    conversationStates.set(chatId, { step: 'waiting_limit', keyId });
+    await telegramContext.reply(`Reply with the new requests-per-minute limit for API key ${keyId}.`, {
+      reply_markup: { force_reply: true },
+    });
+  }
+}
+
+async function handleConversationReply(telegramContext, conversationStates) {
+  const chatId = String(telegramContext.chatId);
+  const state = conversationStates.get(chatId);
+  const text = telegramContext.message?.text?.trim();
+  if (!state || !text || text.startsWith('/')) {
+    return;
+  }
+
+  if (state.step === 'waiting_label') {
+    const apiKey = await generateApiKey({
+      label: text,
+      ownerTelegramId: String(telegramContext.from.id),
+    });
+    conversationStates.delete(chatId);
+    await telegramContext.reply(`Generated API key for: ${apiKey.label}`);
+    await telegramContext.reply(apiKey.key);
+    await telegramContext.reply(
+      'Store this key securely. It will not be shown again in full.',
+      MAIN_MENU_BUTTON_OPTIONS,
+    );
+    return;
+  }
+
+  if (state.step === 'waiting_limit') {
+    const requestsPerMinute = Number(parsePositiveInteger(text, 'requestsPerMinute'));
+    const updated = await setRateLimit(state.keyId, requestsPerMinute);
+    if (!updated) {
+      throw new TypeError(`API key ${state.keyId} was not found`);
+    }
+    conversationStates.delete(chatId);
+    await telegramContext.reply(
+      `API key ${state.keyId} rate limit set to ${requestsPerMinute} requests per minute.`,
+      MAIN_MENU_BUTTON_OPTIONS,
+    );
   }
 }
 
@@ -121,5 +257,46 @@ export function registerApiKeyHandlers(bot, context) {
         );
       },
     });
+  });
+
+  bot.on('callback_query', async (telegramContext) => {
+    await telegramContext.answerCallbackQuery().catch((error) => {
+      context.logger.warn({ error }, 'Unable to answer Telegram callback query');
+    });
+    if (!isAdmin(telegramContext, context.adminIds)) {
+      await telegramContext.reply('Unauthorized');
+      return;
+    }
+
+    try {
+      await handleCallbackAction(telegramContext, context.conversationStates);
+    } catch (error) {
+      context.logger.error(
+        { error, telegramUserId: telegramContext.from?.id },
+        'Telegram callback action failed',
+      );
+      const detail = error instanceof TypeError ? `: ${error.message}` : '';
+      await telegramContext.reply(`Unable to complete the action${detail}`, MAIN_MENU_BUTTON_OPTIONS);
+    }
+  });
+
+  bot.on('message', async (telegramContext) => {
+    if (!isAdmin(telegramContext, context.adminIds)) {
+      return;
+    }
+    if (telegramContext.message?.text?.startsWith('/')) {
+      return;
+    }
+
+    try {
+      await handleConversationReply(telegramContext, context.conversationStates);
+    } catch (error) {
+      context.logger.error(
+        { error, telegramUserId: telegramContext.from?.id },
+        'Telegram conversation step failed',
+      );
+      const detail = error instanceof TypeError ? `: ${error.message}` : '';
+      await telegramContext.reply(`Unable to complete the action${detail}`);
+    }
   });
 }

@@ -1,6 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import swaggerJsdoc from 'swagger-jsdoc';
+import { openapiOperations as broadcastOperations } from '../routes/broadcast.routes.js';
+import { openapiOperations as messageOperations } from '../routes/message.routes.js';
+import { openapiOperations as sessionOperations } from '../routes/session.routes.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -148,7 +151,12 @@ export const swaggerSpec = swaggerJsdoc({
     security: [{ ApiKeyAuth: [] }],
     components: {
       securitySchemes: {
-        ApiKeyAuth: { type: 'apiKey', in: 'header', name: 'x-api-key' },
+        ApiKeyAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'x-api-key',
+          description: 'Pansa Store API key, for example `ps-V1StGXR8_Z5jdHi6B-myT`. Legacy unprefixed keys remain supported.',
+        },
       },
       responses: {
         BadRequest: commonResponses[400],
@@ -186,13 +194,15 @@ export const swaggerSpec = swaggerJsdoc({
           connection_method: { type: 'string', enum: ['qr', 'pairing_code'], example: 'qr' },
           status: {
             type: 'string',
-            enum: ['qr_pending', 'pairing_pending', 'connected', 'disconnected', 'logged_out'],
+            enum: ['qr_pending', 'pairing_pending', 'connected', 'disconnected', 'logged_out', 'expired'],
             example: 'connected',
           },
           created_at: { type: 'string', format: 'date-time', example: '2026-04-01T12:00:00.000Z' },
         }),
-        SessionListResponse: objectSchema(['sessions'], {
+        SessionListResponse: objectSchema(['sessions', 'activeCount', 'maxAllowed'], {
           sessions: { type: 'array', items: { $ref: '#/components/schemas/SessionListItem' } },
+          activeCount: { type: 'integer', minimum: 0, maximum: 5, example: 3 },
+          maxAllowed: { type: 'integer', enum: [5], example: 5 },
         }),
         TextMessage: objectSchema(['sessionId', 'to', 'text'], {
           ...baseMessage,
@@ -354,12 +364,11 @@ export const swaggerSpec = swaggerJsdoc({
   apis: [path.join(root, 'routes', '*.js').replace(/\\/g, '/')],
 });
 
-const operationModules = await Promise.all([
-  import('../routes/session.routes.js'),
-  import('../routes/message.routes.js'),
-  import('../routes/broadcast.routes.js'),
-]);
-const operations = Object.assign({}, ...operationModules.map(({ openapiOperations }) => openapiOperations));
+const operations = {
+  ...sessionOperations,
+  ...messageOperations,
+  ...broadcastOperations,
+};
 
 for (const pathItem of Object.values(swaggerSpec.paths)) {
   for (const operation of Object.values(pathItem)) {

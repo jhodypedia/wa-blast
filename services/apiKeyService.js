@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid';
 import { pool } from '../config/database.js';
 
 const API_KEY_LENGTH = 32;
+const API_KEY_PREFIX = 'ps-';
 const MAX_UNSIGNED_INT = 4294967295;
 
 function requireId(value, name) {
@@ -51,7 +52,7 @@ async function findApiKeyById(keyId) {
 export async function generateApiKey({ label, ownerTelegramId }) {
   const normalizedLabel = requireLabel(label);
   const ownerId = requireId(ownerTelegramId, 'ownerTelegramId');
-  const rawKey = nanoid(API_KEY_LENGTH);
+  const rawKey = `${API_KEY_PREFIX}${nanoid(API_KEY_LENGTH)}`;
 
   const [result] = await pool.execute(
     `INSERT INTO api_keys (\`key\`, label, owner_telegram_id, is_active)

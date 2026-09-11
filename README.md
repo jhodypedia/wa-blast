@@ -94,7 +94,7 @@ npx pm2 save
 1. Start the application and open the Telegram bot configured by `TELEGRAM_BOT_TOKEN`.
 2. From an account whose numeric ID appears in `TELEGRAM_ADMIN_IDS`, send `/start`.
 3. Send `/generatekey initial-admin`.
-4. Store the returned key immediately. Later key listings mask it and do not reveal it in full again.
+4. Store the returned `ps-` prefixed key immediately. Later key listings keep the prefix visible while masking the secret portion and do not reveal it in full again. Existing unprefixed keys remain supported.
 5. In Swagger UI, select **Authorize** and enter the key. API requests send it in the `x-api-key` header.
 
 Non-admin Telegram users receive `Unauthorized` and cannot manage keys.

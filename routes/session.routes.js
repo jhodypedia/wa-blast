@@ -6,7 +6,7 @@ import {
   startPairingSession,
   startSession,
 } from '../controllers/session.controller.js';
-import { jsonBody, sessionOperation } from './openapi.js';
+import { jsonBody, sessionLimitResponse, sessionOperation } from './openapi.js';
 
 const router = Router();
 
@@ -53,16 +53,20 @@ router.delete('/:sessionId', deleteSession);
 
 export const openapiOperations = {
   sessionStartQr: sessionOperation('Start a session and return its QR code', {
+    description: 'Creates a QR session when the API key has fewer than 5 active or pending sessions.',
     requestBody: jsonBody('SessionStart'),
     successStatus: 201,
     successExample: { sessionId: '42-V1StGXR8', status: 'qr_pending', qr: 'data:image/png;base64,...' },
+    responses: { 400: sessionLimitResponse },
   }),
   sessionStartPairing: sessionOperation('Start a session and request a pairing code', {
+    description: 'Creates a pairing-code session when the API key has fewer than 5 active or pending sessions.',
     requestBody: jsonBody('PairingStart'),
     successStatus: 201,
     successExample: { sessionId: '42-V1StGXR8', status: 'pairing_pending', pairingCode: 'ABCD1234' },
+    responses: { 400: sessionLimitResponse },
   }),
-  sessionList: sessionOperation('List sessions owned by the current API key', {
+  sessionList: sessionOperation('List sessions and quota usage for the current API key', {
     successSchema: 'SessionListResponse',
     successExample: {
       sessions: [{
@@ -72,6 +76,8 @@ export const openapiOperations = {
         status: 'connected',
         created_at: '2026-04-01T12:00:00.000Z',
       }],
+      activeCount: 1,
+      maxAllowed: 5,
     },
   }),
   sessionStatus: sessionOperation('Get session status', {
