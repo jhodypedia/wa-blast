@@ -25,24 +25,38 @@ export const messageOperation = (summary, schema) => ({
   responses: messageResponses,
 });
 
-export const sessionOperation = (summary, options = {}) => ({
-  tags: ['Sessions'],
-  summary,
-  ...options,
-  responses: {
-    [options.successStatus ?? 200]: { description: 'Session operation completed', content: { 'application/json': { example: options.successExample ?? { sessionId: 'sales', status: 'connected', qr: null } } } },
-    ...responseRefs,
-  },
-});
+export const sessionOperation = (summary, options = {}) => {
+  const {
+    successStatus = 200, successExample, successSchema, ...operation
+  } = options;
+  const successContent = {
+    example: successExample ?? { sessionId: '42-V1StGXR8', status: 'connected', qr: null },
+  };
+  if (successSchema) {
+    successContent.schema = { $ref: `#/components/schemas/${successSchema}` };
+  }
+  return {
+    tags: ['Sessions'],
+    summary,
+    ...operation,
+    responses: {
+      [successStatus]: { description: 'Session operation completed', content: { 'application/json': successContent } },
+      ...responseRefs,
+    },
+  };
+};
 
-export const broadcastOperation = (summary, options = {}) => ({
-  tags: ['Broadcasts'],
-  summary,
-  ...options,
-  responses: {
-    [options.successStatus ?? 200]: { description: 'Broadcast operation completed', content: { 'application/json': { example: options.successExample ?? { success: true, data: { total: 2, sent: 2, failed: 0, pending: 0 }, error: null } } } },
-    ...responseRefs,
-  },
-});
+export const broadcastOperation = (summary, options = {}) => {
+  const { successStatus = 200, successExample, ...operation } = options;
+  return {
+    tags: ['Broadcasts'],
+    summary,
+    ...operation,
+    responses: {
+      [successStatus]: { description: 'Broadcast operation completed', content: { 'application/json': { example: successExample ?? { success: true, data: { total: 2, sent: 2, failed: 0, pending: 0 }, error: null } } } },
+      ...responseRefs,
+    },
+  };
+};
 
 export { jsonBody };

@@ -1,0 +1,138 @@
+:root {
+  --pansa-ink: #172033;
+  --pansa-navy: #101827;
+  --pansa-accent: #0f766e;
+  --pansa-accent-hover: #115e59;
+  --pansa-surface: #ffffff;
+  --pansa-background: #f3f6f8;
+  --pansa-border: #d9e1e7;
+}
+
+body {
+  margin: 0;
+  background: var(--pansa-background);
+}
+
+.swagger-ui {
+  color: var(--pansa-ink);
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+.swagger-ui .topbar {
+  padding: 12px 0;
+  background: var(--pansa-navy);
+  border-bottom: 3px solid var(--pansa-accent);
+}
+
+.swagger-ui .topbar .wrapper {
+  padding: 0 24px;
+}
+
+.swagger-ui .topbar-wrapper img,
+.swagger-ui .topbar-wrapper .link span {
+  display: none;
+}
+
+.swagger-ui .topbar-wrapper .link {
+  display: none;
+}
+
+.swagger-ui .topbar-wrapper::after {
+  color: #ffffff;
+  content: "Pansa Store API";
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.swagger-ui .wrapper {
+  max-width: 1280px;
+  padding: 0 24px;
+}
+
+.swagger-ui .information-container {
+  margin: 28px 0 18px;
+}
+
+.swagger-ui .info {
+  margin: 24px 0;
+}
+
+.swagger-ui .info .title,
+.swagger-ui .info p,
+.swagger-ui .info li,
+.swagger-ui .opblock-tag,
+.swagger-ui .opblock .opblock-summary-description {
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+.swagger-ui .info a {
+  color: var(--pansa-accent);
+}
+
+.swagger-ui .scheme-container {
+  margin: 0 0 24px;
+  padding: 18px 0;
+  background: var(--pansa-surface);
+  border-block: 1px solid var(--pansa-border);
+  box-shadow: none;
+}
+
+.swagger-ui .auth-wrapper .authorize,
+.swagger-ui .btn.authorize {
+  padding: 9px 16px;
+  color: var(--pansa-accent);
+  background: #ecfdf9;
+  border: 2px solid var(--pansa-accent);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.swagger-ui .auth-wrapper .authorize:hover,
+.swagger-ui .btn.authorize:hover {
+  color: #ffffff;
+  background: var(--pansa-accent-hover);
+  border-color: var(--pansa-accent-hover);
+}
+
+.swagger-ui .auth-wrapper .authorize svg,
+.swagger-ui .btn.authorize svg {
+  fill: currentColor;
+}
+
+.swagger-ui .opblock-tag-section {
+  margin-bottom: 26px;
+}
+
+.swagger-ui .opblock {
+  margin: 0 0 14px;
+  background: var(--pansa-surface);
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgb(23 32 51 / 8%);
+}
+
+.swagger-ui .opblock .opblock-summary {
+  min-height: 54px;
+  padding: 7px;
+}
+
+.swagger-ui .opblock-body {
+  background: rgb(255 255 255 / 72%);
+}
+
+.swagger-ui input,
+.swagger-ui select,
+.swagger-ui textarea {
+  border-color: #aebbc5;
+  border-radius: 4px;
+}
+
+@media (max-width: 640px) {
+  .swagger-ui .wrapper,
+  .swagger-ui .topbar .wrapper {
+    padding-inline: 14px;
+  }
+
+  .swagger-ui .topbar-wrapper::after {
+    font-size: 18px;
+  }
+}

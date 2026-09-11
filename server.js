@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import pino from 'pino';
 import swaggerUi from 'swagger-ui-express';
@@ -13,11 +16,17 @@ import { apiKeyRateLimiter } from './middlewares/rateLimiter.js';
 
 const logger = pino();
 const app = express();
+const root = path.dirname(fileURLToPath(import.meta.url));
+const swaggerCustomCss = readFileSync(
+  path.join(root, 'docs', 'swagger-custom.css'),
+  'utf8',
+);
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'WhatsApp Gateway API Docs',
+  customCss: swaggerCustomCss,
+  customSiteTitle: 'Pansa Store API Docs',
   swaggerOptions: { persistAuthorization: true },
 }));
 app.use('/broadcast', apiKeyAuth, apiKeyRateLimiter, broadcastRoutes);

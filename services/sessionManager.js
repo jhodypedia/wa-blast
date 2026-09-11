@@ -5,6 +5,7 @@ import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
 } from '@rexxhayanasi/elaina-baileys';
+import { nanoid } from 'nanoid';
 import pino from 'pino';
 import QRCode from 'qrcode';
 import { pool } from '../config/database.js';
@@ -30,6 +31,21 @@ function validateSessionId(sessionId) {
   }
 }
 
+export async function generateSessionId(apiKeyId, database = pool) {
+  const ownerId = String(apiKeyId);
+
+  while (true) {
+    const sessionId = `${ownerId}-${nanoid(8)}`;
+    const [rows] = await database.execute(
+      'SELECT 1 FROM sessions WHERE session_name = ? LIMIT 1',
+      [sessionId],
+    );
+    if (rows.length === 0) {
+      return sessionId;
+    }
+  }
+}
+
 function getDisconnectStatusCode(error) {
   return error?.output?.statusCode ?? error?.statusCode;
 }
@@ -41,13 +57,21 @@ async function updateStatus(sessionId, apiKeyId, status) {
   );
 }
 
+function sessionState(record) {
+  return {
+    status: record.status,
+    qrCode: record.qrCode,
+    pairingCode: record.pairingCode,
+  };
+}
+
 function notifyReady(record, error = null) {
   for (const waiter of record.readyWaiters) {
     clearTimeout(waiter.timer);
     if (error) {
       waiter.reject(error);
     } else {
-      waiter.resolve({ status: record.status, qrCode: record.qrCode });
+      waiter.resolve(sessionState(record));
     }
   }
   record.readyWaiters.clear();
@@ -70,7 +94,7 @@ async function connect(record) {
     }
 
     try {
-      if (qr) {
+      if (qr && record.connectionMethod === 'qr') {
         const qrCode = await QRCode.toDataURL(qr);
         if (record.socket !== socket) {
           return;
@@ -84,6 +108,7 @@ async function connect(record) {
       if (connection === 'open') {
         record.status = 'connected';
         record.qrCode = null;
+        record.pairingCode = null;
         record.reconnectAttempts = 0;
         await updateStatus(record.sessionId, record.apiKeyId, record.status);
         notifyReady(record);
@@ -113,6 +138,17 @@ async function connect(record) {
   return socket;
 }
 
+async function waitForSocketOpen(record, timeoutMs = 15000) {
+  if (record.socket?.ws?.isOpen) {
+    return;
+  }
+  await record.socket.waitForConnectionUpdate(
+    ({ connection }) => connection === 'connecting' || connection === 'open',
+    timeoutMs,
+  );
+  await record.socket.waitForSocketOpen();
+}
+
 function scheduleReconnect(record) {
   if (record.reconnectTimer || record.manualLogout) {
     return;
@@ -135,16 +171,28 @@ function scheduleReconnect(record) {
   }, delay);
 }
 
-export async function createSession(sessionId, apiKeyId) {
+async function createSessionRecord(sessionId, apiKeyId, connectionMethod, label = null) {
   validateSessionId(sessionId);
   const ownerId = String(apiKeyId);
-  const existing = sessions.get(sessionId);
+  let existing = sessions.get(sessionId);
 
   if (existing) {
     if (existing.apiKeyId !== ownerId) {
       throw new SessionOwnershipError();
     }
-    return existing.socket;
+    if (existing.status === 'disconnected' || existing.status === 'logged_out') {
+      existing.manualLogout = true;
+      clearTimeout(existing.reconnectTimer);
+      await existing.socket?.end(new Error('Session authentication restarted'));
+      sessions.delete(sessionId);
+      existing = null;
+    }
+  }
+  if (existing) {
+    if (existing.connectionMethod !== connectionMethod) {
+      throw new Error(`Session already uses ${existing.connectionMethod}`);
+    }
+    return existing;
   }
 
   const [owners] = await pool.execute(
@@ -155,19 +203,23 @@ export async function createSession(sessionId, apiKeyId) {
     throw new SessionOwnershipError();
   }
 
+  const initialStatus = connectionMethod === 'qr' ? 'qr_pending' : 'pairing_pending';
   await pool.execute(
-    `INSERT INTO sessions (session_name, api_key_id, status)
-     VALUES (?, ?, 'qr_pending')
-     ON DUPLICATE KEY UPDATE status = 'qr_pending', updated_at = CURRENT_TIMESTAMP`,
-    [sessionId, ownerId],
+    `INSERT INTO sessions (session_name, api_key_id, label, connection_method, status)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE connection_method = VALUES(connection_method),
+       label = VALUES(label), status = VALUES(status), updated_at = CURRENT_TIMESTAMP`,
+    [sessionId, ownerId, label, connectionMethod, initialStatus],
   );
 
   const record = {
     sessionId,
     apiKeyId: ownerId,
     socket: null,
-    status: 'qr_pending',
+    connectionMethod,
+    status: initialStatus,
     qrCode: null,
+    pairingCode: null,
     manualLogout: false,
     reconnectAttempts: 0,
     reconnectTimer: null,
@@ -176,7 +228,8 @@ export async function createSession(sessionId, apiKeyId) {
   sessions.set(sessionId, record);
 
   try {
-    return await connect(record);
+    await connect(record);
+    return record;
   } catch (error) {
     sessions.delete(sessionId);
     await updateStatus(sessionId, ownerId, 'disconnected');
@@ -184,13 +237,39 @@ export async function createSession(sessionId, apiKeyId) {
   }
 }
 
-export async function createPairingSession(sessionId, apiKeyId, phoneNumber) {
-  const socket = await createSession(sessionId, apiKeyId);
+export async function createSession(sessionId, apiKeyId, label) {
+  const record = await createSessionRecord(sessionId, apiKeyId, 'qr', label);
+  return record.socket;
+}
+
+export async function createSessionWithPairingCode(
+  sessionId,
+  apiKeyId,
+  phoneNumber,
+  customCode,
+  label,
+) {
+  const record = await createSessionRecord(sessionId, apiKeyId, 'pairing_code', label);
   try {
-    return await socket.requestPairingCode(phoneNumber.replace(/\D/g, ''));
+    await waitForSocketOpen(record);
+    const pairingCode = await record.socket.requestPairingCode(
+      phoneNumber.replace(/\D/g, ''),
+      customCode,
+    );
+    record.pairingCode = pairingCode;
+    record.status = 'pairing_pending';
+    await updateStatus(record.sessionId, record.apiKeyId, record.status);
+    notifyReady(record);
+    return pairingCode;
   } catch (error) {
-    await logoutSession(sessionId, apiKeyId).catch((logoutError) => {
-      logger.warn({ error: logoutError, sessionId }, 'Pairing session cleanup failed');
+    record.manualLogout = true;
+    clearTimeout(record.reconnectTimer);
+    record.socket?.cancelPairingCode?.();
+    await record.socket?.end(error).catch(() => {});
+    sessions.delete(sessionId);
+    await rm(path.join(sessionsRoot, sessionId), { recursive: true, force: true });
+    await updateStatus(sessionId, apiKeyId, 'disconnected').catch((statusError) => {
+      logger.warn({ error: statusError, sessionId }, 'Pairing failure status update failed');
     });
     throw error;
   }
@@ -222,8 +301,8 @@ export async function waitForSessionReady(sessionId, apiKeyId, timeoutMs = 60000
   if (!record) {
     throw new Error('Session not found');
   }
-  if (record.qrCode || record.status === 'connected') {
-    return { status: record.status, qrCode: record.qrCode };
+  if (record.qrCode || record.pairingCode || record.status === 'connected') {
+    return sessionState(record);
   }
 
   return new Promise((resolve, reject) => {
@@ -232,7 +311,7 @@ export async function waitForSessionReady(sessionId, apiKeyId, timeoutMs = 60000
       reject,
       timer: setTimeout(() => {
         record.readyWaiters.delete(waiter);
-        reject(new Error('Timed out waiting for a QR code'));
+        reject(new Error('Timed out waiting for session authentication'));
       }, timeoutMs),
     };
     record.readyWaiters.add(waiter);
@@ -243,7 +322,8 @@ export async function getSessionStatus(sessionId, apiKeyId) {
   validateSessionId(sessionId);
   const ownerId = String(apiKeyId);
   const [rows] = await pool.execute(
-    'SELECT api_key_id, status, updated_at FROM sessions WHERE session_name = ? LIMIT 1',
+    `SELECT api_key_id, connection_method, status, updated_at
+     FROM sessions WHERE session_name = ? LIMIT 1`,
     [sessionId],
   );
   if (rows.length === 0) {
@@ -257,8 +337,21 @@ export async function getSessionStatus(sessionId, apiKeyId) {
   return {
     status: record?.apiKeyId === ownerId ? record.status : rows[0].status,
     qrCode: record?.apiKeyId === ownerId ? record.qrCode : null,
+    pairingCode: record?.apiKeyId === ownerId ? record.pairingCode : null,
+    connectionMethod: rows[0].connection_method,
     updatedAt: rows[0].updated_at,
   };
+}
+
+export async function listSessions(apiKeyId, database = pool) {
+  const [rows] = await database.execute(
+    `SELECT session_name AS id, label, connection_method, status, created_at
+     FROM sessions
+     WHERE api_key_id = ?
+     ORDER BY created_at DESC, id DESC`,
+    [String(apiKeyId)],
+  );
+  return rows;
 }
 
 export async function logoutSession(sessionId, apiKeyId) {

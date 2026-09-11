@@ -163,13 +163,63 @@ export function sendRaw(sock, target, protoMessage, options) {
   return send(sock, target, { ...protoMessage, raw: true }, options);
 }
 
-// Classic interactive formats are retained for clients that still render them.
+function nativeFlowParams(button) {
+  switch (button.type) {
+    case 'quick_reply':
+      return { display_text: button.displayText, id: button.id };
+    case 'cta_url':
+      return {
+        display_text: button.displayText,
+        url: button.url,
+        merchant_url: button.url,
+      };
+    case 'cta_call':
+      return { display_text: button.displayText, phone_number: button.phoneNumber };
+    case 'cta_copy':
+      return { display_text: button.displayText, copy_code: button.copyText };
+    case 'cta_reminder':
+    case 'cta_cancel_reminder':
+    case 'address_message':
+      return { display_text: button.displayText, id: button.id };
+    case 'single_select':
+      return {
+        title: button.title,
+        sections: button.sections.map((section) => ({
+          title: section.title,
+          ...(section.highlightLabel ? { highlight_label: section.highlightLabel } : {}),
+          rows: section.rows.map((row) => ({
+            ...(row.header ? { header: row.header } : {}),
+            title: row.title,
+            ...(row.description ? { description: row.description } : {}),
+            id: row.id,
+          })),
+        })),
+      };
+    case 'send_location':
+      return {};
+    default:
+      throw new TypeError(`Unsupported native-flow button type: ${button.type}`);
+  }
+}
+
+export function mapNativeFlowButtons(buttons) {
+  return buttons.map((button) => ({
+    name: button.type,
+    buttonParamsJson: JSON.stringify(nativeFlowParams(button)),
+  }));
+}
+
 export function sendButtons(sock, target, text, buttons, content = {}, options) {
-  return send(sock, target, { text, buttons, ...content }, options);
+  return send(sock, target, { text, nativeFlow: mapNativeFlowButtons(buttons), ...content }, options);
 }
 
 export function sendImageButtons(sock, target, image, caption, buttons, content = {}, options) {
-  return send(sock, target, { image, caption, buttons, ...content }, options);
+  return send(sock, target, {
+    image,
+    caption,
+    nativeFlow: mapNativeFlowButtons(buttons),
+    ...content,
+  }, options);
 }
 
 export function sendVideoButtons(sock, target, video, caption, buttons, content = {}, options) {

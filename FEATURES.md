@@ -30,20 +30,40 @@ await sock.sendMessage(jid, content, options)
 
 ## Buttons and Interactive Messages
 
+### Native-flow support in 1.3.9
+
+Elaina Baileys sends modern controls as `nativeFlow` entries. Each entry has the wire shape `{ name, buttonParamsJson: JSON.stringify(params) }`; the JSON property is `buttonParamsJson`, not `paramsJson`.
+
+| Gateway type | Native-flow name | Exact `buttonParamsJson` object | Package evidence | Client support |
+|---|---|---|---|---|
+| Quick reply | `quick_reply` | `{ display_text, id }` | `prepareNativeFlowButtons`, `Button.addReply` | Web, iOS, Android |
+| Open URL | `cta_url` | `{ display_text, url, merchant_url?, webview_interaction? }` | `prepareNativeFlowButtons`, `Button.addUrl` | Web, iOS, Android |
+| Call | `cta_call` | `{ display_text, phone_number }` | `prepareNativeFlowButtons` | Web, iOS, Android |
+| Copy text/code | `cta_copy` | `{ display_text, copy_code }` | `prepareNativeFlowButtons`, `Button.addCopy` | Web, iOS, Android |
+| Reminder | `cta_reminder` | `{ display_text, id }` | `Button.addReminder` | Android only |
+| Cancel reminder | `cta_cancel_reminder` | `{ display_text, id }` | `Button.addCancelReminder` | Android only |
+| Single-select list | `single_select` | `{ title, sections: [{ title, highlight_label?, rows: [{ header?, title, description?, id }] }] }` | `Button.addSelection`, `makeSection`, `makeRow` | Android only |
+| Address request | `address_message` | `{ display_text, id }` | `Button.addAddress` | Android only |
+| Send location | `send_location` | `{}` | `Button.addLocation` | Android only |
+
+`cta_catalog` is recognized by `NATIVE_FLOW_NAMES` and listed by the package as cross-platform, but version 1.3.9 has no typed builder or authoritative parameter schema for it. It is therefore available only through lower-level raw native-flow APIs, not the gateway's typed button endpoints. The same rule applies to recognized business/protocol flows such as order, payment, booking, signup, app, and form messages: recognition of a native-flow name does not establish a stable public payload contract.
+
+The package reads two client limits: a message beginning with `quick_reply` supports at most 10 buttons, while a message beginning with any other type supports at most 3. Quick replies cannot be mixed with non-quick buttons. For predictable rendering, non-quick messages should also use one button type per message. Android-only controls disappear on WhatsApp Web and iOS while the surrounding text card may still arrive.
+
 | Feature name | Function/method | Example payload structure |
 |---|---|---|
 | Classic buttons | `sock.sendMessage` | `{ text: 'Choose', footer: 'Footer', buttons: [{ id: 'yes', text: 'Yes' }, { id: 'no', text: 'No' }] }` |
 | Image with buttons | `sock.sendMessage` | `{ image: Buffer, caption: 'Choose', footer: 'Footer', buttons: [{ id: 'open', text: 'Open' }] }` |
 | Video with buttons | `sock.sendMessage` | `{ video: Buffer, caption: 'Choose', footer: 'Footer', buttons: [{ id: 'play', text: 'Play' }] }` |
-| Native-flow button | `sock.sendMessage` | `{ text: 'Choose', buttons: [{ name: 'quick_reply', paramsJson: '{"id":"yes"}', text: 'Yes' }] }` |
-| Single-select button | `sock.sendMessage` | `{ text: 'Choose', buttons: [{ text: 'Open list', sections: [{ title: 'Options', rows: [{ title: 'One', rowId: 'one' }] }] }] }` |
+| Native-flow button | `sock.sendMessage` | `{ text: 'Choose', nativeFlow: [{ name: 'quick_reply', buttonParamsJson: '{"display_text":"Yes","id":"yes"}' }] }` |
+| Single-select button | `sock.sendMessage` | `{ text: 'Choose', nativeFlow: [{ name: 'single_select', buttonParamsJson: '{"title":"Open list","sections":[{"title":"Options","rows":[{"title":"One","id":"one"}]}]}' }] }` |
 | Legacy list | `sock.sendMessage` | `{ text: 'Choose', title: 'Menu', footer: 'Footer', buttonText: 'Open', sections: [{ title: 'Options', rows: [{ title: 'One', description: 'First', rowId: 'one' }] }] }` |
 | Template message | `sock.sendMessage` | `{ text: 'Choose', footer: 'Footer', templateButtons: [{ id: 'yes', text: 'Yes' }, { url: 'https://example.com', text: 'Visit' }, { call: '+15551234567', text: 'Call' }] }` |
-| Native-flow interactive | `sock.sendMessage` | `{ text: 'Choose', footer: 'Footer', image: Buffer, nativeFlow: [{ name: 'quick_reply', paramsJson: '{"id":"yes"}' }] }` |
-| Carousel | `sock.sendMessage` | `{ text: 'Products', footer: 'Footer', cards: [{ image: Buffer, caption: 'Item', nativeFlow: [{ name: 'quick_reply', paramsJson: '{"id":"item-1"}' }] }] }` |
+| Native-flow interactive | `sock.sendMessage` | `{ text: 'Choose', footer: 'Footer', image: Buffer, nativeFlow: [{ name: 'quick_reply', buttonParamsJson: '{"display_text":"Yes","id":"yes"}' }] }` |
+| Carousel | `sock.sendMessage` | `{ text: 'Products', footer: 'Footer', cards: [{ image: Buffer, caption: 'Item', nativeFlow: [{ name: 'quick_reply', buttonParamsJson: '{"display_text":"Open","id":"item-1"}' }] }] }` |
 | Interactive template wrapper | `sock.sendMessage` | `{ text: 'Choose', nativeFlow: [...], interactiveAsTemplate: true, id: 'template-id' }` |
 
-Classic buttons, lists, templates, and native-flow controls are client-sensitive. The README recommends at most ten quick replies for broad compatibility and notes that single-select lists do not reliably render on WhatsApp Web.
+Classic buttons, lists, templates, and native-flow controls are client-sensitive. Use the native-flow limits and platform notes above for new gateway integrations.
 
 ## Content Modifiers and Message Actions
 

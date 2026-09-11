@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   deleteSession,
+  readSessionList,
   readSessionStatus,
   startPairingSession,
   startSession,
@@ -10,20 +11,29 @@ import { jsonBody, sessionOperation } from './openapi.js';
 const router = Router();
 
 /** @openapi
- * /session/start:
+ * /session/start/qr:
  *   post:
  *     operationId: startQrSession
  *     x-operation: sessionStartQr
  */
+router.post('/start/qr', startSession);
 router.post('/start', startSession);
 
 /** @openapi
- * /session/pairing:
+ * /session/start/pairing:
  *   post:
  *     operationId: startPairingSession
  *     x-operation: sessionStartPairing
  */
-router.post('/pairing', startPairingSession);
+router.post('/start/pairing', startPairingSession);
+
+/** @openapi
+ * /session/list:
+ *   get:
+ *     operationId: listSessions
+ *     x-operation: sessionList
+ */
+router.get('/list', readSessionList);
 
 /** @openapi
  * /session/{sessionId}/status:
@@ -45,15 +55,28 @@ export const openapiOperations = {
   sessionStartQr: sessionOperation('Start a session and return its QR code', {
     requestBody: jsonBody('SessionStart'),
     successStatus: 201,
-    successExample: { sessionId: 'sales', status: 'qr_pending', qr: 'data:image/png;base64,...' },
+    successExample: { sessionId: '42-V1StGXR8', status: 'qr_pending', qr: 'data:image/png;base64,...' },
   }),
   sessionStartPairing: sessionOperation('Start a session and request a pairing code', {
     requestBody: jsonBody('PairingStart'),
     successStatus: 201,
-    successExample: { sessionId: 'sales', status: 'pairing_pending', pairingCode: 'ABCD1234' },
+    successExample: { sessionId: '42-V1StGXR8', status: 'pairing_pending', pairingCode: 'ABCD1234' },
+  }),
+  sessionList: sessionOperation('List sessions owned by the current API key', {
+    successSchema: 'SessionListResponse',
+    successExample: {
+      sessions: [{
+        id: '42-V1StGXR8',
+        label: 'Store support',
+        connection_method: 'qr',
+        status: 'connected',
+        created_at: '2026-04-01T12:00:00.000Z',
+      }],
+    },
   }),
   sessionStatus: sessionOperation('Get session status', {
-    parameters: [{ name: 'sessionId', in: 'path', required: true, schema: { $ref: '#/components/schemas/SessionStart/properties/sessionId' } }],
+    parameters: [{ name: 'sessionId', in: 'path', required: true, schema: { $ref: '#/components/schemas/SessionId' } }],
+    successExample: { sessionId: '42-V1StGXR8', status: 'connected', connection_method: 'pairing_code', qr: null },
   }),
   sessionDelete: sessionOperation('Log out and delete a session', {
     parameters: [{ name: 'sessionId', in: 'path', required: true, schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } }],
