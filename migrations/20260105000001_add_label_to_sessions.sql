@@ -1,0 +1,2 @@
+ALTER TABLE sessions
+  ADD COLUMN IF NOT EXISTS label VARCHAR(100) NULL AFTER session_name;

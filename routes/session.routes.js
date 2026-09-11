@@ -60,7 +60,7 @@ export const openapiOperations = {
     responses: { 400: sessionLimitResponse },
   }),
   sessionStartPairing: sessionOperation('Start a session and request a pairing code', {
-    description: 'Creates a pairing-code session when the API key has fewer than 5 active or pending sessions.',
+    description: 'Creates a pairing-code session when the API key has fewer than 5 active or pending sessions. Pairing codes are generated automatically; custom pairing codes are not supported.',
     requestBody: jsonBody('PairingStart'),
     successStatus: 201,
     successExample: { sessionId: '42-V1StGXR8', status: 'pairing_pending', pairingCode: 'ABCD1234' },
@@ -82,7 +82,16 @@ export const openapiOperations = {
   }),
   sessionStatus: sessionOperation('Get session status', {
     parameters: [{ name: 'sessionId', in: 'path', required: true, schema: { $ref: '#/components/schemas/SessionId' } }],
-    successExample: { sessionId: '42-V1StGXR8', status: 'connected', connection_method: 'pairing_code', qr: null },
+    successSchema: 'SessionStatusResponse',
+    successExample: {
+      sessionId: '42-V1StGXR8',
+      status: 'connected',
+      connection_method: 'pairing_code',
+      qr: null,
+      lastDisconnectReason: null,
+      reconnectAttempts: 0,
+      updatedAt: '2026-04-01T12:00:00.000Z',
+    },
   }),
   sessionDelete: sessionOperation('Log out and delete a session', {
     parameters: [{ name: 'sessionId', in: 'path', required: true, schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } }],

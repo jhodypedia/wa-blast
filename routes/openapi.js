@@ -17,6 +17,24 @@ export const sessionLimitResponse = {
   },
 };
 
+export const whatsappConnectionUnavailableResponse = {
+  description: 'WhatsApp connection closed before the request completed; retry the request.',
+  content: {
+    'application/json': {
+      schema: {
+        type: 'object',
+        required: ['error'],
+        properties: {
+          error: { type: 'string' },
+        },
+      },
+      example: {
+        error: 'WhatsApp connection unavailable. Retry the session request.',
+      },
+    },
+  },
+};
+
 const jsonBody = (schema) => ({
   required: true,
   content: { 'application/json': { schema: { $ref: `#/components/schemas/${schema}` } } },
@@ -54,6 +72,7 @@ export const sessionOperation = (summary, options = {}) => {
     responses: {
       [successStatus]: { description: 'Session operation completed', content: { 'application/json': successContent } },
       ...responseRefs,
+      503: whatsappConnectionUnavailableResponse,
       ...responses,
     },
   };

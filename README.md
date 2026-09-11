@@ -19,26 +19,10 @@ A backend-only, multi-tenant WhatsApp gateway with API-key authentication, per-k
    npm install
    ```
 
-2. Create the database and apply the migrations in order:
+2. Create the database:
 
    ```sql
    CREATE DATABASE whatsapp_gateway CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   USE whatsapp_gateway;
-   SOURCE migrations/001_initial_schema.sql;
-   SOURCE migrations/002_add_pairing_code_sessions.sql;
-   SOURCE migrations/003_add_session_label.sql;
-   ```
-
-   From PowerShell, the migration can instead be piped to the MySQL client:
-
-   ```powershell
-   Get-Content migrations/001_initial_schema.sql, migrations/002_add_pairing_code_sessions.sql, migrations/003_add_session_label.sql | mysql -u root -p whatsapp_gateway
-   ```
-
-   To apply an individual migration through the application's configured database connection:
-
-   ```powershell
-   node config/run-migration.js migrations/003_add_session_label.sql
    ```
 
 3. Copy `.env.example` to `.env` and enter the deployment values:
@@ -47,11 +31,23 @@ A backend-only, multi-tenant WhatsApp gateway with API-key authentication, per-k
    Copy-Item .env.example .env
    ```
 
-4. Verify database access:
+4. Apply all pending database migrations:
+
+   ```powershell
+   npm run migration
+   ```
+
+5. Verify database access:
 
    ```powershell
    npm run db:check
    ```
+
+## Database Migrations
+
+`npm run migration` applies every pending timestamped SQL file in `migrations/` and records completed files in `schema_migrations`. Re-running the command skips migrations that were already applied. For an existing deployment that already has the current schema but no migration ledger, its first run records the historical baseline instead of replaying old `ALTER TABLE` statements.
+
+For every future schema change, add a new timestamped SQL file in `migrations/` instead of applying SQL directly to a database. Do not edit a migration that may already have been applied.
 
 ## Environment Variables
 
@@ -113,7 +109,7 @@ Open [Swagger UI](http://localhost:3000/api-docs/) and authorize with an API key
 ### Pairing Code
 
 1. Run `POST /session/start/pairing` with `phoneNumber` and an optional `label`. The phone number must use international format, including country code.
-2. Optionally include `customCode`, exactly eight characters. If omitted, the gateway generates a code. The response includes the generated `sessionId`.
+2. The gateway requests an auto-generated pairing code. The response includes the generated `sessionId` and `pairingCode`.
 3. On the phone open WhatsApp **Settings > Linked devices > Link a device > Link with phone number instead**, then enter the returned `pairingCode`.
 4. Check `GET /session/{sessionId}/status` until the status is `connected`.
 

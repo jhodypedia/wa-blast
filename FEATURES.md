@@ -168,3 +168,31 @@ Normal application code should use `sock.sendMessage`. Generation helpers and `s
 - `lib/MessageBuilder/extras.js`
 - `WAProto/index.d.ts`
 - Relevant declarations under `lib/**/*.d.ts`
+
+## Connection Resilience
+
+## Session Connection Methods
+
+| Method | Gateway support |
+|---|---|
+| QR code | Supported |
+| Auto-generated pairing code | Supported through `POST /session/start/pairing` with `phoneNumber` |
+| Custom pairing code | Not supported by this package version - removed from the API |
+
+The gateway uses `@rexxhayanasi/elaina-baileys` 1.3.9's exported `DisconnectReason` enum from `lib/Types/index.js`. A session only retries when it has already authenticated, is not manually logged out or expired, and the reason is not terminal. WebSocket abnormal closure `1006` is not part of the enum, but is treated as recoverable because it represents a transport failure.
+
+| Baileys reason | Code | Gateway behavior |
+|---|---:|---|
+| `connectionClosed` | 428 | Should auto-reconnect |
+| `connectionLost` | 408 | Should auto-reconnect |
+| `timedOut` | 408 | Should auto-reconnect |
+| `restartRequired` | 515 | Should auto-reconnect |
+| `unavailableService` | 503 | Should auto-reconnect |
+| WebSocket abnormal closure | 1006 | Should auto-reconnect |
+| `loggedOut` | 401 | Should NOT auto-reconnect (terminal) |
+| `badSession` | 500 | Should NOT auto-reconnect (terminal) |
+| `connectionReplaced` | 440 | Should NOT auto-reconnect (terminal) |
+| `multideviceMismatch` | 411 | Should NOT auto-reconnect (terminal) |
+| `forbidden` | 403 | Should NOT auto-reconnect (terminal) |
+
+The installed enum defines no other named disconnect reasons. Unknown close codes default to retryable handling so temporary upstream or network failures do not orphan authenticated sessions.

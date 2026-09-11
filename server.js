@@ -13,6 +13,7 @@ import sessionRoutes from './routes/session.routes.js';
 import { startTelegramBot, stopTelegramBot } from './bot/index.js';
 import { apiKeyAuth } from './middlewares/apiKeyAuth.js';
 import { apiKeyRateLimiter } from './middlewares/rateLimiter.js';
+import { restoreConnectedSessions } from './services/sessionManager.js';
 
 const logger = pino();
 const app = express();
@@ -26,7 +27,17 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customCss: swaggerCustomCss,
-  customSiteTitle: 'Pansa Store API Docs',
+  customSiteTitle: 'PansaGroup API Docs',
+  customJsStr: `document.addEventListener('DOMContentLoaded', () => {
+    if (document.querySelector('.pansagroup-contact-badge')) return;
+    const badge = document.createElement('a');
+    badge.className = 'pansagroup-contact-badge';
+    badge.href = 'https://t.me/pansagr';
+    badge.target = '_blank';
+    badge.rel = 'noreferrer';
+    badge.textContent = 'Contact @pansagr on Telegram';
+    document.body.append(badge);
+  });`,
   swaggerOptions: { persistAuthorization: true },
 }));
 app.use('/broadcast', apiKeyAuth, apiKeyRateLimiter, broadcastRoutes);
@@ -45,6 +56,10 @@ app.get('/health', async (_request, response) => {
 
 const server = app.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, 'WhatsApp Gateway API listening');
+});
+
+restoreConnectedSessions().catch((error) => {
+  logger.error({ error }, 'Failed to begin WhatsApp session restoration');
 });
 
 let telegramBot = null;

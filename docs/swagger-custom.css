@@ -1,27 +1,38 @@
 :root {
-  --pansa-ink: #172033;
-  --pansa-navy: #101827;
-  --pansa-accent: #0f766e;
-  --pansa-accent-hover: #115e59;
-  --pansa-surface: #ffffff;
-  --pansa-background: #f3f6f8;
-  --pansa-border: #d9e1e7;
+  --brand-primary: #0b5d5b;
+  --brand-dark: #102a43;
+  --brand-accent: #e97b3c;
+  --brand-accent-hover: #c9632d;
+  --text-color: #172033;
+  --muted-text: #52606d;
+  --bg-color: #f4f7f8;
+  --surface-color: #ffffff;
+  --code-bg: #eaf0f2;
+  --border-color: #d6e0e4;
+  --get-color: #0b7285;
+  --post-color: #087f5b;
+  --delete-color: #c92a2a;
+  --patch-color: #9c6200;
+  --ui-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --code-font: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 body {
   margin: 0;
-  background: var(--pansa-background);
+  background: var(--bg-color);
 }
 
 .swagger-ui {
-  color: var(--pansa-ink);
-  font-family: "Segoe UI", Tahoma, sans-serif;
+  color: var(--text-color);
+  font-family: var(--ui-font);
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 .swagger-ui .topbar {
-  padding: 12px 0;
-  background: var(--pansa-navy);
-  border-bottom: 3px solid var(--pansa-accent);
+  padding: 13px 0;
+  background: var(--brand-dark);
+  border-bottom: 3px solid var(--brand-accent);
 }
 
 .swagger-ui .topbar .wrapper {
@@ -29,7 +40,8 @@ body {
 }
 
 .swagger-ui .topbar-wrapper img,
-.swagger-ui .topbar-wrapper .link span {
+.swagger-ui .topbar-wrapper .link span,
+.swagger-ui .topbar-wrapper .link svg {
   display: none;
 }
 
@@ -39,9 +51,14 @@ body {
 
 .swagger-ui .topbar-wrapper::after {
   color: #ffffff;
-  content: "Pansa Store API";
-  font-size: 20px;
-  font-weight: 700;
+  content: "PansaGroup API";
+  display: block;
+  font-family: var(--ui-font);
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .swagger-ui .wrapper {
@@ -62,40 +79,61 @@ body {
 .swagger-ui .info li,
 .swagger-ui .opblock-tag,
 .swagger-ui .opblock .opblock-summary-description {
-  font-family: "Segoe UI", Tahoma, sans-serif;
+  font-family: var(--ui-font);
 }
 
 .swagger-ui .info a {
-  color: var(--pansa-accent);
+  color: var(--brand-primary);
+  font-weight: 650;
+}
+
+.swagger-ui .info .title {
+  color: var(--brand-dark);
+  font-size: 2.05rem;
+  line-height: 1.2;
+}
+
+.swagger-ui .info p,
+.swagger-ui .renderedMarkdown p,
+.swagger-ui .renderedMarkdown li {
+  color: var(--muted-text);
 }
 
 .swagger-ui .scheme-container {
   margin: 0 0 24px;
-  padding: 18px 0;
-  background: var(--pansa-surface);
-  border-block: 1px solid var(--pansa-border);
-  box-shadow: none;
+  padding: 18px 24px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgb(16 42 67 / 7%);
 }
 
 .swagger-ui .auth-wrapper .authorize,
 .swagger-ui .btn.authorize {
   padding: 9px 16px;
-  color: var(--pansa-accent);
-  background: #ecfdf9;
-  border: 2px solid var(--pansa-accent);
+  color: var(--brand-accent);
+  background: #fff7f0;
+  border: 2px solid var(--brand-accent);
   border-radius: 6px;
   box-shadow: none;
+  font-family: var(--ui-font);
+  font-weight: 700;
 }
 
 .swagger-ui .auth-wrapper .authorize:hover,
 .swagger-ui .btn.authorize:hover {
   color: #ffffff;
-  background: var(--pansa-accent-hover);
-  border-color: var(--pansa-accent-hover);
+  background: var(--brand-accent-hover);
+  border-color: var(--brand-accent-hover);
 }
 
 .swagger-ui .auth-wrapper .authorize svg,
 .swagger-ui .btn.authorize svg {
+  fill: var(--brand-accent);
+}
+
+.swagger-ui .auth-wrapper .authorize:hover svg,
+.swagger-ui .btn.authorize:hover svg {
   fill: currentColor;
 }
 
@@ -104,19 +142,52 @@ body {
 }
 
 .swagger-ui .opblock {
-  margin: 0 0 14px;
-  background: var(--pansa-surface);
-  border-radius: 6px;
-  box-shadow: 0 1px 3px rgb(23 32 51 / 8%);
+  margin: 0 0 16px;
+  overflow: hidden;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-left: 5px solid var(--brand-primary);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgb(16 42 67 / 8%);
+}
+
+.swagger-ui .opblock.opblock-get { border-left-color: var(--get-color); }
+.swagger-ui .opblock.opblock-post { border-left-color: var(--post-color); }
+.swagger-ui .opblock.opblock-delete { border-left-color: var(--delete-color); }
+.swagger-ui .opblock.opblock-patch { border-left-color: var(--patch-color); }
+
+.swagger-ui .opblock.opblock-get .opblock-summary-method { background: var(--get-color); }
+.swagger-ui .opblock.opblock-post .opblock-summary-method { background: var(--post-color); }
+.swagger-ui .opblock.opblock-delete .opblock-summary-method { background: var(--delete-color); }
+.swagger-ui .opblock.opblock-patch .opblock-summary-method { background: var(--patch-color); }
+
+.swagger-ui .opblock .opblock-summary-method {
+  min-width: 76px;
+  border-radius: 4px;
+  color: #ffffff;
+  font-family: var(--ui-font);
+  font-weight: 750;
 }
 
 .swagger-ui .opblock .opblock-summary {
   min-height: 54px;
-  padding: 7px;
+  padding: 9px 12px;
+}
+
+.swagger-ui .opblock .opblock-summary-path {
+  color: var(--brand-dark);
+  font-family: var(--code-font);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.swagger-ui .opblock .opblock-summary-description {
+  color: var(--muted-text);
+  font-size: 0.93rem;
 }
 
 .swagger-ui .opblock-body {
-  background: rgb(255 255 255 / 72%);
+  background: #fbfcfc;
 }
 
 .swagger-ui input,
@@ -124,15 +195,179 @@ body {
 .swagger-ui textarea {
   border-color: #aebbc5;
   border-radius: 4px;
+  font-family: var(--ui-font);
 }
 
-@media (max-width: 640px) {
+.swagger-ui .btn.execute,
+.swagger-ui .btn.cancel,
+.swagger-ui .btn.try-out__btn {
+  border-radius: 5px;
+  font-family: var(--ui-font);
+  font-weight: 700;
+}
+
+.swagger-ui .btn.execute {
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+}
+
+.swagger-ui .microlight,
+.swagger-ui .model-box,
+.swagger-ui pre,
+.swagger-ui .highlight-code {
+  overflow-x: auto;
+  background: var(--code-bg);
+  font-family: var(--code-font);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.swagger-ui .model-box {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.swagger-ui .response-col_description,
+.swagger-ui .responses-table {
+  overflow-x: auto;
+}
+
+.swagger-ui .dialog-ux .modal-ux {
+  max-width: min(640px, calc(100vw - 32px));
+  border-radius: 8px;
+}
+
+.pansagroup-contact-badge {
+  position: fixed;
+  right: 20px;
+  bottom: 18px;
+  z-index: 1001;
+  max-width: calc(100vw - 40px);
+  padding: 9px 12px;
+  color: #ffffff;
+  background: var(--brand-primary);
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 5px;
+  box-shadow: 0 4px 16px rgb(16 42 67 / 20%);
+  font-family: var(--ui-font);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+}
+
+.pansagroup-contact-badge::after {
+  content: " ×";
+  margin-left: 8px;
+  color: rgb(255 255 255 / 75%);
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+.pansagroup-contact-badge:hover,
+.pansagroup-contact-badge:focus-visible {
+  background: var(--brand-dark);
+  color: #ffffff;
+}
+
+@media (max-width: 767px) {
   .swagger-ui .wrapper,
   .swagger-ui .topbar .wrapper {
     padding-inline: 14px;
   }
 
+  .swagger-ui {
+    font-size: 14px;
+  }
+
   .swagger-ui .topbar-wrapper::after {
-    font-size: 18px;
+    font-size: 17px;
+  }
+
+  .swagger-ui .info .title {
+    font-size: 1.7rem;
+  }
+
+  .swagger-ui .scheme-container {
+    padding: 14px;
+  }
+
+  .swagger-ui .opblock .opblock-summary {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .swagger-ui .opblock .opblock-summary-path,
+  .swagger-ui .opblock .opblock-summary-description {
+    flex-basis: 100%;
+    max-width: 100%;
+    padding-left: 0;
+  }
+
+  .swagger-ui .opblock .opblock-summary-description {
+    margin-left: 0;
+  }
+
+  .swagger-ui .btn.try-out__btn,
+  .swagger-ui .btn.execute {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .swagger-ui .dialog-ux .modal-ux {
+    width: calc(100vw - 28px);
+    max-width: calc(100vw - 28px);
+    margin: 0 auto;
+  }
+
+  .swagger-ui .dialog-ux .modal-ux-content {
+    max-height: calc(100vh - 96px);
+    overflow-y: auto;
+  }
+
+  .pansagroup-contact-badge {
+    right: 14px;
+    bottom: 14px;
+  }
+}
+
+@media (max-width: 479px) {
+  .swagger-ui .topbar .wrapper {
+    padding-inline: 12px;
+  }
+
+  .swagger-ui .topbar-wrapper::after {
+    overflow: hidden;
+    font-size: 15px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .swagger-ui .wrapper {
+    padding-inline: 12px;
+  }
+
+  .swagger-ui .opblock .opblock-summary-method {
+    min-width: 64px;
+    font-size: 0.72rem;
+  }
+
+  .swagger-ui .parameters-container,
+  .swagger-ui .responses-table,
+  .swagger-ui .model-example {
+    overflow-x: auto;
+  }
+
+  .swagger-ui .responses-table {
+    display: block;
+  }
+
+  .pansagroup-contact-badge {
+    max-width: calc(100vw - 28px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   }
 }

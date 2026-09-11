@@ -36,8 +36,11 @@ test('Telegram masking keeps the ps prefix visible and Swagger documents it', as
 });
 
 test('the API key database column holds the prefix and random portion', async () => {
-  const source = await readSource('../migrations/001_initial_schema.sql');
-  const length = Number(source.match(/`key` VARCHAR\((\d+)\)/)?.[1]);
+  const createTableSource = await readSource('../migrations/20260101000001_create_api_keys_table.sql');
+  const extensionSource = await readSource('../migrations/20260108000000_extend_api_key_length_for_prefix.sql');
+  const initialLength = Number(createTableSource.match(/`key` VARCHAR\((\d+)\)/)?.[1]);
+  const extendedLength = Number(extensionSource.match(/`key` VARCHAR\((\d+)\)/)?.[1]);
 
-  assert.ok(length >= 35);
+  assert.equal(initialLength, 64);
+  assert.ok(extendedLength >= 35);
 });

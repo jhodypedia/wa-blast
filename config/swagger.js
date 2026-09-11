@@ -130,23 +130,21 @@ export const swaggerSpec = swaggerJsdoc({
   definition: {
     openapi: '3.0.3',
     info: {
-      title: 'Pansa Store — WhatsApp Gateway API',
+      title: 'PansaGroup — WhatsApp Gateway API',
       version: '1.0.0',
       description: [
         'A multi-tenant API for managing WhatsApp sessions and sending direct or broadcast messages.',
         '',
-        '**Created by JhodyPedia / Pansa Store** — Contact: [Telegram](https://t.me/username)',
-        '',
-        'Powered by Pansa Store · Support: [t.me/username](https://t.me/username)',
+        '**Created by PansaGroup** · Contact: [@pansagr](https://t.me/pansagr)',
       ].join('\n'),
       contact: {
-        name: 'JhodyPedia - Pansa Store',
-        url: 'https://t.me/username',
+        name: 'PansaGroup',
+        url: 'https://t.me/pansagr',
       },
     },
     externalDocs: {
-      description: 'Contact on Telegram',
-      url: 'https://t.me/username',
+      description: 'Contact PansaGroup on Telegram',
+      url: 'https://t.me/pansagr',
     },
     security: [{ ApiKeyAuth: [] }],
     components: {
@@ -186,7 +184,6 @@ export const swaggerSpec = swaggerJsdoc({
         PairingStart: objectSchema(['phoneNumber'], {
           label: sessionLabel,
           phoneNumber: { type: 'string', pattern: '^\\+?[1-9]\\d{7,14}$', example: '+15551234567' },
-          customCode: { type: 'string', minLength: 8, maxLength: 8, example: 'SALE2026' },
         }),
         SessionListItem: objectSchema(['id', 'label', 'connection_method', 'status', 'created_at'], {
           id: sessionId,
@@ -194,10 +191,26 @@ export const swaggerSpec = swaggerJsdoc({
           connection_method: { type: 'string', enum: ['qr', 'pairing_code'], example: 'qr' },
           status: {
             type: 'string',
-            enum: ['qr_pending', 'pairing_pending', 'connected', 'disconnected', 'logged_out', 'expired'],
+            enum: ['qr_pending', 'pairing_pending', 'connected', 'reconnecting', 'disconnected', 'logged_out', 'expired', 'terminated'],
             example: 'connected',
           },
           created_at: { type: 'string', format: 'date-time', example: '2026-04-01T12:00:00.000Z' },
+        }),
+        SessionStatusResponse: objectSchema([
+          'sessionId', 'status', 'connection_method', 'qr', 'lastDisconnectReason', 'reconnectAttempts', 'updatedAt',
+        ], {
+          sessionId,
+          status: {
+            type: 'string',
+            enum: ['qr_pending', 'pairing_pending', 'connected', 'reconnecting', 'disconnected', 'logged_out', 'expired', 'terminated'],
+            description: 'disconnected indicates retry attempts were exhausted; terminated indicates a permanent disconnect such as connectionReplaced.',
+            example: 'connected',
+          },
+          connection_method: { type: 'string', enum: ['qr', 'pairing_code'], example: 'pairing_code' },
+          qr: { type: 'string', nullable: true, example: null },
+          lastDisconnectReason: { type: 'string', nullable: true, example: 'connectionLost/timedOut' },
+          reconnectAttempts: { type: 'integer', minimum: 0, maximum: 10, example: 2 },
+          updatedAt: { type: 'string', format: 'date-time', example: '2026-04-01T12:00:00.000Z' },
         }),
         SessionListResponse: objectSchema(['sessions', 'activeCount', 'maxAllowed'], {
           sessions: { type: 'array', items: { $ref: '#/components/schemas/SessionListItem' } },

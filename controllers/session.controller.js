@@ -22,8 +22,9 @@ const startSchema = z.object({ label: labelSchema }).strict();
 const pairingSchema = z.object({
   label: labelSchema,
   phoneNumber: z.string().regex(/^\+?[1-9]\d{7,14}$/),
-  customCode: z.string().length(8).optional(),
 }).strict();
+const CUSTOM_PAIRING_CODE_MESSAGE = 'Custom pairing code is not supported - a code will be auto-generated';
+
 function sendError(response, error) {
   if (error instanceof z.ZodError) {
     return response.status(400).json({
@@ -41,11 +42,13 @@ function sendError(response, error) {
   if (message === 'Session not found') {
     return response.status(404).json({ error: message });
   }
-  const upstreamStatus = error?.output?.statusCode ?? error?.statusCode;
+  const upstreamStatus = typeof error === 'number'
+    ? error
+    : error?.output?.statusCode ?? error?.statusCode;
   if (message.includes('Timed out') || upstreamStatus === 408) {
     return response.status(504).json({ error: message || 'WhatsApp request timed out' });
   }
-  if (upstreamStatus === 428 || upstreamStatus === 503) {
+  if (upstreamStatus === 428 || upstreamStatus === 503 || upstreamStatus === 1006) {
     logger.warn({ error }, 'WhatsApp connection unavailable');
     return response.status(503).json({
       error: 'WhatsApp connection unavailable. Retry the session request.',
@@ -70,13 +73,16 @@ export async function startSession(request, response) {
 
 export async function startPairingSession(request, response) {
   try {
-    const { label, phoneNumber, customCode } = pairingSchema.parse(request.body);
+    if (Object.hasOwn(request.body ?? {}, 'customCode')) {
+      return response.status(400).json({ error: CUSTOM_PAIRING_CODE_MESSAGE });
+    }
+
+    const { label, phoneNumber } = pairingSchema.parse(request.body);
     const sessionId = await generateSessionId(request.apiKey.id);
     const pairingCode = await createSessionWithPairingCode(
       sessionId,
       request.apiKey.id,
       phoneNumber,
-      customCode,
       label,
     );
     return response.status(201).json({ sessionId, status: 'pairing_pending', pairingCode });
@@ -111,6 +117,8 @@ export async function readSessionStatus(request, response) {
       status: session.status,
       connection_method: session.connectionMethod,
       qr: session.qrCode,
+      lastDisconnectReason: session.lastDisconnectReason,
+      reconnectAttempts: session.reconnectAttempts,
       updatedAt: session.updatedAt,
     });
   } catch (error) {
