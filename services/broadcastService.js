@@ -203,15 +203,15 @@ export function validateBroadcastContent(payload) {
   }
 }
 
-export async function createBroadcast(payload) {
+export async function createBroadcast(payload, apiKeyId) {
   const connection = await pool.getConnection();
   const broadcastId = randomUUID();
 
   try {
     await connection.beginTransaction();
     const [sessions] = await connection.execute(
-      'SELECT id FROM sessions WHERE session_name = ? LIMIT 1 FOR UPDATE',
-      [payload.sessionId],
+      'SELECT id FROM sessions WHERE session_name = ? AND api_key_id = ? LIMIT 1 FOR UPDATE',
+      [payload.sessionId, apiKeyId],
     );
     if (sessions.length === 0) {
       await connection.rollback();
@@ -270,16 +270,17 @@ export async function processBroadcast(socket, payload, rows) {
   }
 }
 
-export async function getBroadcastStatus(broadcastId) {
+export async function getBroadcastStatus(broadcastId, apiKeyId) {
   const [rows] = await pool.execute(
     `SELECT
        COUNT(*) AS total,
        COALESCE(SUM(status = 'sent'), 0) AS sent,
        COALESCE(SUM(status = 'failed'), 0) AS failed,
        COALESCE(SUM(status = 'pending'), 0) AS pending
-     FROM broadcast_logs
-     WHERE broadcast_id = ?`,
-    [broadcastId],
+    FROM broadcast_logs AS logs
+    INNER JOIN sessions ON sessions.id = logs.session_id
+    WHERE logs.broadcast_id = ? AND sessions.api_key_id = ?`,
+      [broadcastId, apiKeyId],
   );
   if (Number(rows[0].total) === 0) {
     return null;

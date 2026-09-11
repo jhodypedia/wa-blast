@@ -17,6 +17,13 @@ const sessionsRoot = path.resolve(
   'sessions',
 );
 
+export class SessionOwnershipError extends Error {
+  constructor() {
+    super('Session belongs to a different API key');
+    this.name = 'SessionOwnershipError';
+  }
+}
+
 function validateSessionId(sessionId) {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) {
     throw new Error('sessionId must contain only letters, numbers, underscores, or hyphens');
@@ -135,7 +142,7 @@ export async function createSession(sessionId, apiKeyId) {
 
   if (existing) {
     if (existing.apiKeyId !== ownerId) {
-      throw new Error('Session ID is already owned by another API key');
+      throw new SessionOwnershipError();
     }
     return existing.socket;
   }
@@ -145,7 +152,7 @@ export async function createSession(sessionId, apiKeyId) {
     [sessionId],
   );
   if (owners.length > 0 && String(owners[0].api_key_id) !== ownerId) {
-    throw new Error('Session ID is already owned by another API key');
+    throw new SessionOwnershipError();
   }
 
   await pool.execute(
@@ -177,13 +184,42 @@ export async function createSession(sessionId, apiKeyId) {
   }
 }
 
-export function getSession(sessionId) {
-  return sessions.get(sessionId)?.socket ?? null;
+export async function createPairingSession(sessionId, apiKeyId, phoneNumber) {
+  const socket = await createSession(sessionId, apiKeyId);
+  try {
+    return await socket.requestPairingCode(phoneNumber.replace(/\D/g, ''));
+  } catch (error) {
+    await logoutSession(sessionId, apiKeyId).catch((logoutError) => {
+      logger.warn({ error: logoutError, sessionId }, 'Pairing session cleanup failed');
+    });
+    throw error;
+  }
+}
+
+export async function getSession(sessionId, apiKeyId) {
+  validateSessionId(sessionId);
+  const ownerId = String(apiKeyId);
+  const [rows] = await pool.execute(
+    'SELECT api_key_id FROM sessions WHERE session_name = ? LIMIT 1',
+    [sessionId],
+  );
+  if (rows.length === 0) {
+    return null;
+  }
+  if (String(rows[0].api_key_id) !== ownerId) {
+    throw new SessionOwnershipError();
+  }
+
+  const record = sessions.get(sessionId);
+  return record?.apiKeyId === ownerId ? record.socket : null;
 }
 
 export async function waitForSessionReady(sessionId, apiKeyId, timeoutMs = 60000) {
   const record = sessions.get(sessionId);
-  if (!record || record.apiKeyId !== String(apiKeyId)) {
+  if (record && record.apiKeyId !== String(apiKeyId)) {
+    throw new SessionOwnershipError();
+  }
+  if (!record) {
     throw new Error('Session not found');
   }
   if (record.qrCode || record.status === 'connected') {
@@ -207,11 +243,14 @@ export async function getSessionStatus(sessionId, apiKeyId) {
   validateSessionId(sessionId);
   const ownerId = String(apiKeyId);
   const [rows] = await pool.execute(
-    'SELECT status, updated_at FROM sessions WHERE session_name = ? AND api_key_id = ? LIMIT 1',
-    [sessionId, ownerId],
+    'SELECT api_key_id, status, updated_at FROM sessions WHERE session_name = ? LIMIT 1',
+    [sessionId],
   );
   if (rows.length === 0) {
     return null;
+  }
+  if (String(rows[0].api_key_id) !== ownerId) {
+    throw new SessionOwnershipError();
   }
 
   const record = sessions.get(sessionId);

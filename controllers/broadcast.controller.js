@@ -9,7 +9,7 @@ import {
   processBroadcast,
   validateBroadcastContent,
 } from '../services/broadcastService.js';
-import { getSession } from '../services/sessionManager.js';
+import { getSession, SessionOwnershipError } from '../services/sessionManager.js';
 
 function failure(response, status, message, details) {
   return response.status(status).json({
@@ -24,12 +24,12 @@ export async function postBroadcast(request, response) {
     const payload = broadcastMessageSchema.parse(request.body);
     validateBroadcastContent(payload);
 
-    const socket = getSession(payload.sessionId);
+    const socket = await getSession(payload.sessionId, request.apiKey.id);
     if (!socket) {
       return failure(response, 404, 'Session is not active');
     }
 
-    const broadcast = await createBroadcast(payload);
+    const broadcast = await createBroadcast(payload, request.apiKey.id);
     if (!broadcast) {
       return failure(response, 404, 'Session was not found in the database');
     }
@@ -50,6 +50,9 @@ export async function postBroadcast(request, response) {
     if (error instanceof z.ZodError) {
       return failure(response, 400, 'Invalid broadcast payload', error.issues);
     }
+    if (error instanceof SessionOwnershipError) {
+      return failure(response, 403, error.message);
+    }
     return failure(response, 500, 'Could not create broadcast');
   }
 }
@@ -57,7 +60,7 @@ export async function postBroadcast(request, response) {
 export async function readBroadcastStatus(request, response) {
   try {
     const broadcastId = broadcastIdSchema.parse(request.params.broadcast_id);
-    const status = await getBroadcastStatus(broadcastId);
+    const status = await getBroadcastStatus(broadcastId, request.apiKey.id);
     if (!status) {
       return failure(response, 404, 'Broadcast was not found');
     }

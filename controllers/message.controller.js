@@ -11,7 +11,7 @@ import { pollMessageSchema } from '../middlewares/validators/poll.validator.js';
 import { stickerMessageSchema } from '../middlewares/validators/sticker.validator.js';
 import { textMessageSchema } from '../middlewares/validators/text.validator.js';
 import { videoMessageSchema } from '../middlewares/validators/video.validator.js';
-import { getSession } from '../services/sessionManager.js';
+import { getSession, SessionOwnershipError } from '../services/sessionManager.js';
 import {
   sendAudio,
   sendButtons,
@@ -47,7 +47,7 @@ function createMessageHandler(schema, sendMessage) {
   return async function messageHandler(request, response) {
     try {
       const payload = schema.parse(request.body);
-      const socket = getSession(payload.sessionId);
+      const socket = await getSession(payload.sessionId, request.apiKey.id);
       if (!socket) {
         return failure(response, 404, 'Session is not active');
       }
@@ -60,6 +60,9 @@ function createMessageHandler(schema, sendMessage) {
     } catch (error) {
       if (error instanceof z.ZodError) {
         return failure(response, 400, 'Invalid message payload', error.issues);
+      }
+      if (error instanceof SessionOwnershipError) {
+        return failure(response, 403, error.message);
       }
       return failure(response, 500, 'Message operation failed');
     }
