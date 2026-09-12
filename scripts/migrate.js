@@ -120,7 +120,7 @@ async function hasCurrentApplicationSchema() {
   ]));
   const sessionStatus = columns.get('sessions.status') ?? '';
 
-  return columns.get('api_keys.key') === 'varchar(128)'
+  return columns.get('api_keys.key') === 'varchar(160)'
     && columns.get('sessions.connection_method') === "enum('qr','pairing_code')"
     && columns.get('sessions.label') === 'varchar(100)'
     && columns.get('sessions.last_disconnect_reason') === 'varchar(100)'

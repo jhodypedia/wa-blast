@@ -153,7 +153,7 @@ export const swaggerSpec = swaggerJsdoc({
           type: 'apiKey',
           in: 'header',
           name: 'x-api-key',
-          description: 'Pansa Store API key, for example `ps-V1StGXR8_Z5jdHi6B-myT`. Legacy unprefixed keys remain supported.',
+          description: 'PansaGroup API key, for example `ps-7f3a9c2e1b8d4f60a5c3e9b21d84f6a0c7e3b5f912d84a6c`. New keys use lowercase cryptographic hex; legacy keys remain supported.',
         },
       },
       responses: {

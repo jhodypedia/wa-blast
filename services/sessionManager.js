@@ -98,7 +98,7 @@ export async function countActiveSessions(apiKeyId, database = pool) {
   const [rows] = await database.execute(
     `SELECT COUNT(*) AS active_count
      FROM sessions
-     WHERE api_key_id = ? AND status IN (?, ?, ?)`,
+     WHERE api_key_id = ? AND status IN (?, ?, ?, ?)`,
     [String(apiKeyId), ...ACTIVE_SESSION_STATUSES],
   );
   return Number(rows[0]?.active_count ?? 0);
@@ -110,6 +110,14 @@ export function getDisconnectStatusCode(error) {
 
 export function getDisconnectReasonName(statusCode) {
   return DISCONNECT_REASON_NAMES.get(statusCode) ?? `unknown(${statusCode ?? 'none'})`;
+}
+
+function createSocketConnectionError(record) {
+  const error = new Error(
+    `WhatsApp session terminated before socket connection: ${record.lastDisconnectReason ?? 'unknown'}`,
+  );
+  error.statusCode = record.lastDisconnectStatusCode;
+  return error;
 }
 
 export function getReconnectDelay(attempt) {
@@ -201,6 +209,8 @@ async function connect(record) {
         record.socket = null;
         const statusCode = getDisconnectStatusCode(lastDisconnect?.error);
         const reason = getDisconnectReasonName(statusCode);
+        record.lastDisconnectReason = reason;
+        record.lastDisconnectStatusCode = statusCode;
 
         if (record.manualLogout || isTerminalDisconnectReason(statusCode)) {
           const terminalStatus = record.manualLogout || statusCode === DisconnectReason.loggedOut
@@ -214,10 +224,18 @@ async function connect(record) {
         }
 
         if (!record.wasConnected) {
+          record.status = 'reconnecting';
+          await updateStatus(record.sessionId, record.apiKeyId, record.status, {
+            lastDisconnectReason: reason,
+            reconnectAttempts: record.reconnectAttempts,
+          });
+          if (!RECOVERABLE_DISCONNECT_REASONS.has(statusCode)) {
+            logger.warn({ sessionId: record.sessionId, statusCode, reason }, 'Non-terminal authentication failure; retrying session');
+          }
+          scheduleReconnect(record);
           return;
         }
 
-        record.lastDisconnectReason = reason;
         record.status = 'reconnecting';
         await updateStatus(record.sessionId, record.apiKeyId, record.status, {
           lastDisconnectReason: reason,
@@ -282,14 +300,68 @@ function scheduleExpiration(record) {
 }
 
 async function waitForSocketOpen(record, timeoutMs = 15000) {
-  if (record.socket?.ws?.isOpen) {
-    return;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const socket = record.socket;
+    if (socket?.ws?.isOpen) {
+      return;
+    }
+
+    if (record.manualLogout) {
+      throw createSocketConnectionError(record);
+    }
+
+    if (record.status === 'disconnected' || Date.now() >= deadline) {
+      throw new Error('Timed out waiting for WhatsApp socket connection');
+    }
+
+    if (!socket) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+
+    try {
+      await socket.waitForConnectionUpdate(
+        ({ connection }) => connection === 'connecting' || connection === 'open',
+        Math.max(1, deadline - Date.now()),
+      );
+      await socket.waitForSocketOpen();
+      return;
+    } catch {
+      if (record.manualLogout) {
+        throw createSocketConnectionError(record);
+      }
+
+      if (record.status === 'disconnected' || Date.now() >= deadline) {
+        throw new Error('Timed out waiting for WhatsApp socket connection');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
-  await record.socket.waitForConnectionUpdate(
-    ({ connection }) => connection === 'connecting' || connection === 'open',
-    timeoutMs,
-  );
-  await record.socket.waitForSocketOpen();
+}
+
+async function requestPairingCode(record, phoneNumber) {
+  const deadline = Date.now() + SESSION_AUTH_TIMEOUT_MS;
+
+  while (true) {
+    await waitForSocketOpen(record, Math.max(1, deadline - Date.now()));
+    const socket = record.socket;
+    try {
+      return await socket.requestPairingCode(phoneNumber.replace(/\D/g, ''));
+    } catch (error) {
+      const statusCode = getDisconnectStatusCode(error);
+      if (
+        !RECOVERABLE_DISCONNECT_REASONS.has(statusCode)
+        || record.manualLogout
+        || Date.now() >= deadline
+      ) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
 
 function scheduleReconnect(record) {
@@ -399,6 +471,7 @@ async function createSessionRecord(sessionId, apiKeyId, connectionMethod, label 
     manualLogout: false,
     wasConnected: false,
     lastDisconnectReason: null,
+    lastDisconnectStatusCode: null,
     reconnectAttempts: 0,
     reconnectTimer: null,
     expireTimer: null,
@@ -431,10 +504,7 @@ export async function createSessionWithPairingCode(
 ) {
   const record = await createSessionRecord(sessionId, apiKeyId, 'pairing_code', label);
   try {
-    await waitForSocketOpen(record);
-    const pairingCode = await record.socket.requestPairingCode(
-      phoneNumber.replace(/\D/g, ''),
-    );
+    const pairingCode = await requestPairingCode(record, phoneNumber);
     record.pairingCode = pairingCode;
     record.status = 'pairing_pending';
     await updateStatus(record.sessionId, record.apiKeyId, record.status);

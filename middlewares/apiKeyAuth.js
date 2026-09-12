@@ -1,7 +1,7 @@
 import { validateApiKey } from '../services/apiKeyService.js';
 
 const LEGACY_API_KEY_PATTERN = /^[A-Za-z0-9_-]{32}$/;
-const PREFIXED_API_KEY_PATTERN = /^ps-[A-Za-z0-9_-]{32}$/;
+const PREFIXED_API_KEY_PATTERN = /^ps-(?:[A-Za-z0-9_-]{32}|[a-f0-9]{48})$/;
 
 export async function apiKeyAuth(request, response, next) {
   try {

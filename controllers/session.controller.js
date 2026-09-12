@@ -48,6 +48,12 @@ function sendError(response, error) {
   if (message.includes('Timed out') || upstreamStatus === 408) {
     return response.status(504).json({ error: message || 'WhatsApp request timed out' });
   }
+  if (upstreamStatus === 401) {
+    logger.warn({ error }, 'WhatsApp rejected pairing session');
+    return response.status(502).json({
+      error: 'WhatsApp rejected the pairing session before a code could be generated. Verify the account can link companion devices, then retry.',
+    });
+  }
   if (upstreamStatus === 428 || upstreamStatus === 503 || upstreamStatus === 1006) {
     logger.warn({ error }, 'WhatsApp connection unavailable');
     return response.status(503).json({

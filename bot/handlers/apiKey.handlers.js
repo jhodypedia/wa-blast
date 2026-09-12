@@ -7,6 +7,8 @@ import {
 import { handleCommand, isAdmin } from './commandUtils.js';
 import { MAIN_MENU_BUTTON_OPTIONS, MAIN_MENU_REPLY_OPTIONS } from './start.handler.js';
 
+const API_KEY_ID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+
 function maskKey(key) {
   const visibleStartLength = key.startsWith('ps-') ? 7 : 4;
   return `${key.slice(0, visibleStartLength)}${'*'.repeat(Math.max(0, key.length - visibleStartLength - 4))}${key.slice(-4)}`;
@@ -111,9 +113,9 @@ async function handleCallbackAction(telegramContext, conversationStates) {
     return;
   }
 
-  const revokeMatch = /^revoke_(\d+)$/.exec(data);
+  const revokeMatch = new RegExp(`^revoke_(${API_KEY_ID_PATTERN})$`, 'i').exec(data);
   if (revokeMatch) {
-    const keyId = parsePositiveInteger(revokeMatch[1], 'keyId');
+    const keyId = parseApiKeyId(revokeMatch[1], 'keyId');
     await telegramContext.reply(`Revoke API key ${keyId}?`, {
       reply_markup: {
         inline_keyboard: [[
@@ -125,9 +127,9 @@ async function handleCallbackAction(telegramContext, conversationStates) {
     return;
   }
 
-  const confirmMatch = /^confirm_revoke_(\d+)$/.exec(data);
+  const confirmMatch = new RegExp(`^confirm_revoke_(${API_KEY_ID_PATTERN})$`, 'i').exec(data);
   if (confirmMatch) {
-    const keyId = parsePositiveInteger(confirmMatch[1], 'keyId');
+    const keyId = parseApiKeyId(confirmMatch[1], 'keyId');
     const revoked = await revokeApiKey(keyId);
     if (!revoked) {
       throw new TypeError(`API key ${keyId} was not found or was already revoked`);
@@ -137,9 +139,9 @@ async function handleCallbackAction(telegramContext, conversationStates) {
     return;
   }
 
-  const setLimitMatch = /^setlimit_(\d+)$/.exec(data);
+  const setLimitMatch = new RegExp(`^setlimit_(${API_KEY_ID_PATTERN})$`, 'i').exec(data);
   if (setLimitMatch) {
-    const keyId = parsePositiveInteger(setLimitMatch[1], 'keyId');
+    const keyId = parseApiKeyId(setLimitMatch[1], 'keyId');
     conversationStates.set(chatId, { step: 'waiting_limit', keyId });
     await telegramContext.reply(`Reply with the new requests-per-minute limit for API key ${keyId}.`, {
       reply_markup: { force_reply: true },
@@ -191,6 +193,14 @@ function parsePositiveInteger(value, name) {
   return value;
 }
 
+function parseApiKeyId(value, name) {
+  const id = String(value ?? '').trim().toLowerCase();
+  if (!new RegExp(`^${API_KEY_ID_PATTERN}$`, 'i').test(id)) {
+    throw new TypeError(`${name} must be a UUID`);
+  }
+  return id;
+}
+
 export function registerApiKeyHandlers(bot, context) {
   bot.command('generatekey', async (telegramContext) => {
     await handleCommand({
@@ -229,7 +239,7 @@ export function registerApiKeyHandlers(bot, context) {
       context: telegramContext,
       ...context,
       action: async () => {
-        const keyId = parsePositiveInteger(telegramContext.match?.trim(), 'keyId');
+        const keyId = parseApiKeyId(telegramContext.match?.trim(), 'keyId');
         const revoked = await revokeApiKey(keyId);
         if (!revoked) {
           throw new TypeError(`API key ${keyId} was not found`);
@@ -245,7 +255,7 @@ export function registerApiKeyHandlers(bot, context) {
       ...context,
       action: async () => {
         const [rawKeyId, rawRequestsPerMinute] = telegramContext.match?.trim().split(/\s+/) ?? [];
-        const keyId = parsePositiveInteger(rawKeyId, 'keyId');
+        const keyId = parseApiKeyId(rawKeyId, 'keyId');
         const rawLimit = parsePositiveInteger(rawRequestsPerMinute, 'requestsPerMinute');
         const requestsPerMinute = Number(rawLimit);
         const updated = await setRateLimit(keyId, requestsPerMinute);

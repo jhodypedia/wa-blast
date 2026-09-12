@@ -62,6 +62,15 @@ test('session reconnect policy distinguishes terminal and retryable disconnects'
   assert.match(source, /WHERE status IN \('connected', 'reconnecting'\)/);
 });
 
+test('non-terminal pre-authentication disconnects use the reconnect policy', async () => {
+  const source = await readSource('../services/sessionManager.js');
+
+  assert.match(
+    source,
+    /if \(!record\.wasConnected\) \{\s*record\.status = 'reconnecting';[\s\S]*?if \(!RECOVERABLE_DISCONNECT_REASONS\.has\(statusCode\)\) \{[\s\S]*?scheduleReconnect\(record\);/,
+  );
+});
+
 test('Swagger documents session reconnect diagnostics', () => {
   const response = swaggerSpec.paths['/session/{sessionId}/status'].get.responses[200];
   const schema = swaggerSpec.components.schemas.SessionStatusResponse;
@@ -77,6 +86,17 @@ test('pairing requests use the package auto-generation signature', async () => {
   const source = await readSource('../services/sessionManager.js');
 
   assert.match(source, /createSessionWithPairingCode\(\s*sessionId,\s*apiKeyId,\s*phoneNumber,\s*label,\s*\)/);
-  assert.match(source, /requestPairingCode\(\s*phoneNumber\.replace\(\/\\D\/g, ''\),\s*\)/);
+  assert.match(source, /async function requestPairingCode\(record, phoneNumber\)/);
+  assert.match(source, /socket\.requestPairingCode\(phoneNumber\.replace\(\/\\D\/g, ''\)\)/);
   assert.doesNotMatch(source, /customCode/);
+});
+
+test('pairing-code requests retry recoverable socket failures', async () => {
+  const source = await readSource('../services/sessionManager.js');
+
+  assert.match(
+    source,
+    /const statusCode = getDisconnectStatusCode\(error\);\s*if \(\s*!RECOVERABLE_DISCONNECT_REASONS\.has\(statusCode\)/,
+  );
+  assert.match(source, /const deadline = Date\.now\(\) \+ SESSION_AUTH_TIMEOUT_MS;/);
 });

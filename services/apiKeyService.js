@@ -1,9 +1,18 @@
-import { nanoid } from 'nanoid';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { pool } from '../config/database.js';
 
-const API_KEY_LENGTH = 32;
+const API_KEY_RANDOM_BYTES = 24;
 const API_KEY_PREFIX = 'ps-';
 const MAX_UNSIGNED_INT = 4294967295;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function requireUuid(value, name) {
+  const id = String(value ?? '').trim().toLowerCase();
+  if (!UUID_PATTERN.test(id)) {
+    throw new TypeError(`${name} must be a UUID`);
+  }
+  return id;
+}
 
 function requireId(value, name) {
   const id = String(value ?? '').trim();
@@ -52,15 +61,16 @@ async function findApiKeyById(keyId) {
 export async function generateApiKey({ label, ownerTelegramId }) {
   const normalizedLabel = requireLabel(label);
   const ownerId = requireId(ownerTelegramId, 'ownerTelegramId');
-  const rawKey = `${API_KEY_PREFIX}${nanoid(API_KEY_LENGTH)}`;
+  const keyId = randomUUID();
+  const rawKey = `${API_KEY_PREFIX}${randomBytes(API_KEY_RANDOM_BYTES).toString('hex')}`;
 
-  const [result] = await pool.execute(
-    `INSERT INTO api_keys (\`key\`, label, owner_telegram_id, is_active)
-     VALUES (?, ?, ?, TRUE)`,
-    [rawKey, normalizedLabel, ownerId],
+  await pool.execute(
+    `INSERT INTO api_keys (id, \`key\`, label, owner_telegram_id, is_active)
+     VALUES (?, ?, ?, ?, TRUE)`,
+    [keyId, rawKey, normalizedLabel, ownerId],
   );
 
-  return findApiKeyById(result.insertId);
+  return findApiKeyById(keyId);
 }
 
 export async function listApiKeys({ ownerTelegramId } = {}) {
@@ -83,7 +93,7 @@ export async function listApiKeys({ ownerTelegramId } = {}) {
 }
 
 export async function revokeApiKey(keyId) {
-  const id = requireId(keyId, 'keyId');
+  const id = requireUuid(keyId, 'keyId');
   const [result] = await pool.execute(
     `UPDATE api_keys
      SET is_active = FALSE, revoked_at = NOW()
@@ -110,7 +120,7 @@ export async function validateApiKey(rawKey) {
 }
 
 export async function setRateLimit(keyId, requestsPerMinute) {
-  const id = requireId(keyId, 'keyId');
+  const id = requireUuid(keyId, 'keyId');
   if (
     !Number.isInteger(requestsPerMinute)
     || requestsPerMinute < 1
