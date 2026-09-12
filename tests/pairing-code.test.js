@@ -35,6 +35,16 @@ test('socket close code 1006 is reported as a retryable connection failure', asy
   assert.match(source, /WhatsApp connection unavailable\. Retry the session request\./);
 });
 
+test('session connections refresh the WhatsApp Web version and retain upstream failures', async () => {
+  const source = await readSource('../services/sessionManager.js');
+
+  assert.match(source, /fetchLatestWaWebVersion/);
+  assert.match(source, /const versionResult = await fetchLatestWaWebVersion\(\)/);
+  assert.match(source, /if \(!versionResult\.isLatest\)/);
+  assert.match(source, /UPSTREAM_FAILURE_REASON/);
+  assert.match(source, /error\?\.data\?\.reason/);
+});
+
 test('Swagger documents only auto-generated pairing codes', () => {
   const pairingStart = swaggerSpec.components.schemas.PairingStart;
   const operation = swaggerSpec.paths['/session/start/pairing'].post;
@@ -62,12 +72,12 @@ test('session reconnect policy distinguishes terminal and retryable disconnects'
   assert.match(source, /WHERE status IN \('connected', 'reconnecting'\)/);
 });
 
-test('non-terminal pre-authentication disconnects use the reconnect policy', async () => {
+test('only classified recoverable disconnects use the reconnect policy', async () => {
   const source = await readSource('../services/sessionManager.js');
 
   assert.match(
     source,
-    /if \(!record\.wasConnected\) \{\s*record\.status = 'reconnecting';[\s\S]*?if \(!RECOVERABLE_DISCONNECT_REASONS\.has\(statusCode\)\) \{[\s\S]*?scheduleReconnect\(record\);/,
+    /if \(!RECOVERABLE_DISCONNECT_REASONS\.has\(statusCode\)\) \{[\s\S]*?await abandonSession\(record, reason\);[\s\S]*?return;[\s\S]*?scheduleReconnect\(record\);/,
   );
 });
 
@@ -87,16 +97,64 @@ test('pairing requests use the package auto-generation signature', async () => {
 
   assert.match(source, /createSessionWithPairingCode\(\s*sessionId,\s*apiKeyId,\s*phoneNumber,\s*label,\s*\)/);
   assert.match(source, /async function requestPairingCode\(record, phoneNumber\)/);
-  assert.match(source, /socket\.requestPairingCode\(phoneNumber\.replace\(\/\\D\/g, ''\)\)/);
+  assert.match(source, /const normalizedNumber = phoneNumber\.replace\(\/\\D\/g, ''\)/);
+  assert.match(source, /socket\.requestPairingCode\(normalizedNumber\)/);
   assert.doesNotMatch(source, /customCode/);
 });
 
 test('pairing-code requests retry recoverable socket failures', async () => {
   const source = await readSource('../services/sessionManager.js');
 
-  assert.match(
-    source,
-    /const statusCode = getDisconnectStatusCode\(error\);\s*if \(\s*!RECOVERABLE_DISCONNECT_REASONS\.has\(statusCode\)/,
-  );
+  assert.match(source, /const classification = classifyPairingError\(error\)/);
+  assert.match(source, /classification\.retry === 'none'/);
+  assert.match(source, /classification\.retry === 'cancel-and-retry'/);
   assert.match(source, /const deadline = Date\.now\(\) \+ SESSION_AUTH_TIMEOUT_MS;/);
+});
+
+test('pairing requests the code directly after transport readiness', async () => {
+  const source = await readSource('../services/sessionManager.js');
+  const requestPairingCodeSource = source.slice(
+    source.indexOf('async function requestPairingCode'),
+    source.indexOf('function scheduleReconnect'),
+  );
+
+  assert.match(
+    requestPairingCodeSource,
+    /await waitForSocketOpen[\s\S]*?return await socket\.requestPairingCode/,
+  );
+  assert.doesNotMatch(requestPairingCodeSource, /waitForConnectionUpdate/);
+});
+
+test('successful pairing survives the expected post-registration socket restart', async () => {
+  const source = await readSource('../services/sessionManager.js');
+
+  assert.match(source, /if \(isNewLogin\) \{\s*clearTimeout\(record\.expireTimer\);\s*record\.expireTimer = null;/);
+});
+
+test('pairing waits for the transport socket without requiring authentication', async () => {
+  const source = await readSource('../services/sessionManager.js');
+  const waitForSocketOpenSource = source.slice(
+    source.indexOf('async function waitForSocketOpen'),
+    source.indexOf('async function requestPairingCode'),
+  );
+
+  assert.match(waitForSocketOpenSource, /await socket\.waitForSocketOpen\(\);/);
+  assert.doesNotMatch(waitForSocketOpenSource, /socket\.waitForConnectionUpdate/);
+  assert.match(source, /getDisconnectStatusCode\(error\) !== undefined \|\| record\.socket !== socket/);
+  assert.match(source, /const socketError = createSocketConnectionError\(record, error\);/);
+  assert.match(source, /if \(!RECOVERABLE_DISCONNECT_REASONS\.has\(socketError\.statusCode\)\) \{\s*throw socketError;/);
+  assert.match(source, /if \(error\.isSocketConnectionError\) \{\s*throw error;/);
+});
+
+test('the local pairing client waits longer than the server authentication deadline', async () => {
+  const source = await readSource('../test-curl.js');
+
+  assert.match(source, /timeout: 70_000/);
+});
+
+test('confirmed WhatsApp connection failures are reported as upstream rejections', async () => {
+  const source = await readSource('../controllers/session.controller.js');
+
+  assert.match(source, /upstreamStatus === 401 \|\| upstreamStatus === 500/);
+  assert.doesNotMatch(source, /message\.includes\('Timed out'\) \|\| upstreamStatus === 408/);
 });

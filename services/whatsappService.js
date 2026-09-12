@@ -11,8 +11,30 @@ import {
 } from '@rexxhayanasi/elaina-baileys';
 import { formatNumber } from '../utils/formatNumber.js';
 
+export const WHATSAPP_OPERATION_TIMEOUT_MS = 30_000;
+
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+export class WhatsAppOperationTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`WhatsApp operation timed out after ${timeoutMs}ms`);
+    this.name = 'WhatsAppOperationTimeoutError';
+    this.code = 'WHATSAPP_OPERATION_TIMEOUT';
+  }
+}
+
+async function withTimeout(operation, timeoutMs = WHATSAPP_OPERATION_TIMEOUT_MS) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new WhatsAppOperationTimeoutError(timeoutMs)), timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function messageId(result) {
@@ -25,11 +47,15 @@ function messageId(result) {
 async function run(target, operation) {
   try {
     const jid = formatNumber(target);
-    const result = await operation(jid);
+    const result = await withTimeout(Promise.resolve().then(() => operation(jid)));
     const id = messageId(result);
     return id ? { success: true, messageId: id } : { success: true };
   } catch (error) {
-    return { success: false, error: errorMessage(error) };
+    return {
+      success: false,
+      error: errorMessage(error),
+      code: error?.code ?? 'WHATSAPP_OPERATION_FAILED',
+    };
   }
 }
 

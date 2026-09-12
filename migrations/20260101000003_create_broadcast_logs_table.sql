@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS broadcast_logs (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   broadcast_id VARCHAR(64) NOT NULL,
   session_id BIGINT UNSIGNED NOT NULL,
-  target_number VARCHAR(32) NOT NULL,
+  target_number VARCHAR(128) NOT NULL,
   message_type VARCHAR(32) NOT NULL,
   status ENUM('pending', 'sent', 'failed') NOT NULL DEFAULT 'pending',
   error_message TEXT NULL,

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import makeWASocket, {
   DisconnectReason,
+  fetchLatestWaWebVersion,
   useMultiFileAuthState,
 } from '@rexxhayanasi/elaina-baileys';
 import { nanoid } from 'nanoid';
@@ -16,6 +17,13 @@ export const MAX_ACTIVE_SESSIONS = 5;
 export const SESSION_AUTH_TIMEOUT_MS = 60000;
 export const MAX_RECONNECT_ATTEMPTS = 10;
 export const MAX_RECONNECT_DELAY_MS = 60000;
+// requestPairingCode() in @rexxhayanasi/elaina-baileys already waits for the
+// server and rejects with a named error (rate-overlimit, not-allowed, 409,
+// "never answered") instead of hanging — so we no longer race it against our
+// own timeout. These control only how WE retry after one of those rejections.
+export const PAIRING_RETRY_BASE_DELAY_MS = 1000;
+export const PAIRING_RETRY_MAX_DELAY_MS = 8000;
+export const WA_VERSION_CACHE_TTL_MS = 10 * 60 * 1000; // avoid refetching every reconnect
 export const SESSION_LIMIT_MESSAGE = 'Maximum of 5 active sessions reached for this API key. Please log out or wait for an existing session to expire before creating a new one.';
 const ACTIVE_SESSION_STATUSES = ['qr_pending', 'pairing_pending', 'connected', 'reconnecting'];
 const RECOVERABLE_DISCONNECT_REASONS = new Set([
@@ -45,11 +53,17 @@ const DISCONNECT_REASON_NAMES = new Map([
   [DisconnectReason.unavailableService, 'unavailableService'],
   [1006, 'websocketAbnormalClosure'],
 ]);
+const UPSTREAM_FAILURE_REASON = 'whatsAppConnectionFailure';
 const sessionsRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
   'sessions',
 );
+
+// Cache the WA web version lookup so every reconnect attempt doesn't add
+// an extra network round-trip before the socket is even created.
+let cachedWaVersion = null;
+let cachedWaVersionAt = 0;
 
 export class SessionOwnershipError extends Error {
   constructor() {
@@ -63,6 +77,41 @@ export class SessionLimitError extends Error {
     super(SESSION_LIMIT_MESSAGE);
     this.name = 'SessionLimitError';
   }
+}
+
+// Classifies the named rejections documented for requestPairingCode():
+// rate-overlimit (429), not-allowed / feature errors, 409 (already pending),
+// "accepted without registering", and "never answered". Anything else is
+// treated as an unrecognized/library-internal error and not retried blindly.
+function classifyPairingError(error) {
+  const statusCode = error?.output?.statusCode ?? error?.statusCode;
+  const message = String(error?.message ?? '');
+
+  if (statusCode === 409) {
+    return { kind: 'pending', retry: 'cancel-and-retry', secondsLeft: error?.data?.secondsLeft };
+  }
+  if (statusCode === 429 || /rate-overlimit/i.test(message)) {
+    return { kind: 'rate-limited', retry: 'none' };
+  }
+  if (/not-allowed/i.test(message)) {
+    return { kind: 'not-allowed', retry: 'none' };
+  }
+  if (statusCode === 400 || /international format/i.test(message)) {
+    return { kind: 'invalid-number', retry: 'none' };
+  }
+  if (/never answered/i.test(message)) {
+    return { kind: 'never-answered', retry: 'backoff' };
+  }
+  if (/accepted without registering/i.test(message)) {
+    return { kind: 'unregistered-accept', retry: 'backoff' };
+  }
+
+  const disconnectStatusCode = getDisconnectStatusCode(error);
+  if (RECOVERABLE_DISCONNECT_REASONS.has(disconnectStatusCode)) {
+    return { kind: 'socket-recoverable', retry: 'backoff' };
+  }
+
+  return { kind: 'unknown', retry: 'none' };
 }
 
 function validateSessionId(sessionId) {
@@ -112,11 +161,27 @@ export function getDisconnectReasonName(statusCode) {
   return DISCONNECT_REASON_NAMES.get(statusCode) ?? `unknown(${statusCode ?? 'none'})`;
 }
 
-function createSocketConnectionError(record) {
+function getDisconnectDetails(error) {
+  const statusCode = getDisconnectStatusCode(error);
+  const upstreamReason = error?.data?.reason ?? error?.output?.payload?.reason;
+  const reason = upstreamReason === undefined
+    ? getDisconnectReasonName(statusCode)
+    : `${UPSTREAM_FAILURE_REASON}(${upstreamReason})`;
+  return { statusCode, reason, upstreamReason };
+}
+
+function createSocketConnectionError(record, cause) {
+  const details = getDisconnectDetails(cause);
+  const statusCode = details.statusCode ?? record.lastDisconnectStatusCode;
+  const reason = details.statusCode === undefined
+    ? record.lastDisconnectReason
+    : details.reason;
   const error = new Error(
-    `WhatsApp session terminated before socket connection: ${record.lastDisconnectReason ?? 'unknown'}`,
+    `WhatsApp session terminated before socket connection: ${reason ?? 'unknown'}`,
+    { cause },
   );
-  error.statusCode = record.lastDisconnectStatusCode;
+  error.statusCode = statusCode;
+  error.isSocketConnectionError = true;
   return error;
 }
 
@@ -124,8 +189,38 @@ export function getReconnectDelay(attempt) {
   return Math.min(1000 * (2 ** Math.max(0, attempt - 1)), MAX_RECONNECT_DELAY_MS);
 }
 
+// Same exponential curve as reconnect, but with its own base/cap since
+// pairing retries should back off faster than a full session reconnect.
+export function getPairingRetryDelay(attempt) {
+  return Math.min(
+    PAIRING_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
+    PAIRING_RETRY_MAX_DELAY_MS,
+  );
+}
+
 export function isTerminalDisconnectReason(statusCode) {
   return TERMINAL_DISCONNECT_REASONS.has(statusCode);
+}
+
+async function getWaVersion() {
+  const now = Date.now();
+  if (cachedWaVersion && (now - cachedWaVersionAt) < WA_VERSION_CACHE_TTL_MS) {
+    return cachedWaVersion;
+  }
+
+  try {
+    const versionResult = await fetchLatestWaWebVersion();
+    if (!versionResult.isLatest) {
+      throw versionResult.error ?? new Error('Latest WhatsApp Web version was unavailable');
+    }
+    cachedWaVersion = versionResult.version;
+    cachedWaVersionAt = now;
+    return cachedWaVersion;
+  } catch (error) {
+    logger.warn({ error }, 'Unable to refresh WhatsApp Web version; using package default');
+    // Fall back to a stale cached version rather than none, if we have one.
+    return cachedWaVersion ?? undefined;
+  }
 }
 
 async function updateStatus(sessionId, apiKeyId, status, details = {}) {
@@ -168,20 +263,31 @@ function notifyReady(record, error = null) {
 async function connect(record) {
   const authPath = getSessionAuthPath(record.sessionId, record.apiKeyId);
   const { state, saveCreds } = await useMultiFileAuthState(authPath);
+  const version = await getWaVersion();
   const socket = makeWASocket({
     auth: state,
     logger: logger.child({ sessionId: record.sessionId }),
     printQRInTerminal: false,
+    ...(version ? { version } : {}),
   });
 
   record.socket = socket;
-  socket.ev.on('creds.update', saveCreds);
-  socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+  socket.ev.on('creds.update', (...args) => {
+    Promise.resolve(saveCreds(...args)).catch((error) => {
+      logger.error({ error, sessionId: record.sessionId }, 'WhatsApp credential update failed');
+    });
+  });
+  socket.ev.on('connection.update', async ({ connection, isNewLogin, lastDisconnect, qr }) => {
     if (sessions.get(record.sessionId) !== record || record.socket !== socket) {
       return;
     }
 
     try {
+      if (isNewLogin) {
+        clearTimeout(record.expireTimer);
+        record.expireTimer = null;
+      }
+
       if (qr && record.connectionMethod === 'qr') {
         const qrCode = await QRCode.toDataURL(qr);
         if (record.socket !== socket) {
@@ -207,10 +313,16 @@ async function connect(record) {
 
       if (connection === 'close') {
         record.socket = null;
-        const statusCode = getDisconnectStatusCode(lastDisconnect?.error);
-        const reason = getDisconnectReasonName(statusCode);
+        const { statusCode, reason, upstreamReason } = getDisconnectDetails(lastDisconnect?.error);
         record.lastDisconnectReason = reason;
         record.lastDisconnectStatusCode = statusCode;
+
+        logger.warn({
+          sessionId: record.sessionId,
+          statusCode,
+          upstreamReason,
+          reason,
+        }, 'WhatsApp connection closed');
 
         if (record.manualLogout || isTerminalDisconnectReason(statusCode)) {
           const terminalStatus = record.manualLogout || statusCode === DisconnectReason.loggedOut
@@ -223,16 +335,9 @@ async function connect(record) {
           return;
         }
 
-        if (!record.wasConnected) {
-          record.status = 'reconnecting';
-          await updateStatus(record.sessionId, record.apiKeyId, record.status, {
-            lastDisconnectReason: reason,
-            reconnectAttempts: record.reconnectAttempts,
-          });
-          if (!RECOVERABLE_DISCONNECT_REASONS.has(statusCode)) {
-            logger.warn({ sessionId: record.sessionId, statusCode, reason }, 'Non-terminal authentication failure; retrying session');
-          }
-          scheduleReconnect(record);
+        if (!RECOVERABLE_DISCONNECT_REASONS.has(statusCode)) {
+          logger.warn({ sessionId: record.sessionId, statusCode, reason }, 'Unclassified disconnect will not be retried');
+          await abandonSession(record, reason);
           return;
         }
 
@@ -241,12 +346,7 @@ async function connect(record) {
           lastDisconnectReason: reason,
           reconnectAttempts: record.reconnectAttempts,
         });
-        if (RECOVERABLE_DISCONNECT_REASONS.has(statusCode)) {
-          scheduleReconnect(record);
-        } else {
-          logger.warn({ sessionId: record.sessionId, statusCode, reason }, 'Unknown disconnect reason; retrying session');
-          scheduleReconnect(record);
-        }
+        scheduleReconnect(record);
       }
     } catch (error) {
       logger.error({ error, sessionId: record.sessionId }, 'Connection update failed');
@@ -291,6 +391,22 @@ async function terminateSession(record, status, reason) {
   });
 }
 
+async function abandonSession(record, reason) {
+  record.status = 'disconnected';
+  clearTimeout(record.reconnectTimer);
+  clearTimeout(record.expireTimer);
+  record.reconnectTimer = null;
+  record.expireTimer = null;
+  sessions.delete(record.sessionId);
+  notifyReady(record, new Error(`WhatsApp session disconnected: ${reason}`));
+  await record.socket?.end(new Error(`WhatsApp session disconnected: ${reason}`)).catch(() => {});
+  record.socket = null;
+  await updateStatus(record.sessionId, record.apiKeyId, record.status, {
+    lastDisconnectReason: reason,
+    reconnectAttempts: record.reconnectAttempts,
+  });
+}
+
 function scheduleExpiration(record) {
   record.expireTimer = setTimeout(() => {
     expirePendingSession(record).catch((error) => {
@@ -322,13 +438,20 @@ async function waitForSocketOpen(record, timeoutMs = 15000) {
     }
 
     try {
-      await socket.waitForConnectionUpdate(
-        ({ connection }) => connection === 'connecting' || connection === 'open',
-        Math.max(1, deadline - Date.now()),
-      );
       await socket.waitForSocketOpen();
       return;
-    } catch {
+    } catch (error) {
+      if (error.isSocketConnectionError) {
+        throw error;
+      }
+
+      if (getDisconnectStatusCode(error) !== undefined || record.socket !== socket) {
+        const socketError = createSocketConnectionError(record, error);
+        if (!RECOVERABLE_DISCONNECT_REASONS.has(socketError.statusCode)) {
+          throw socketError;
+        }
+      }
+
       if (record.manualLogout) {
         throw createSocketConnectionError(record);
       }
@@ -343,23 +466,35 @@ async function waitForSocketOpen(record, timeoutMs = 15000) {
 
 async function requestPairingCode(record, phoneNumber) {
   const deadline = Date.now() + SESSION_AUTH_TIMEOUT_MS;
+  const normalizedNumber = phoneNumber.replace(/\D/g, '');
+  let attempt = 0;
 
   while (true) {
     await waitForSocketOpen(record, Math.max(1, deadline - Date.now()));
     const socket = record.socket;
+    attempt += 1;
+
     try {
-      return await socket.requestPairingCode(phoneNumber.replace(/\D/g, ''));
+      return await socket.requestPairingCode(normalizedNumber);
     } catch (error) {
-      const statusCode = getDisconnectStatusCode(error);
-      if (
-        !RECOVERABLE_DISCONNECT_REASONS.has(statusCode)
-        || record.manualLogout
-        || Date.now() >= deadline
-      ) {
+      const classification = classifyPairingError(error);
+
+      if (classification.retry === 'none' || record.manualLogout || Date.now() >= deadline) {
         throw error;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (classification.retry === 'cancel-and-retry') {
+        record.socket?.cancelPairingCode?.();
+      }
+
+      logger.warn({
+        sessionId: record.sessionId,
+        attempt,
+        pairingError: classification.kind,
+      }, 'Pairing code request failed; retrying');
+
+      const delay = getPairingRetryDelay(attempt);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))));
     }
   }
 }
@@ -370,13 +505,10 @@ function scheduleReconnect(record) {
   }
 
   if (record.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-    record.status = 'disconnected';
-    updateStatus(record.sessionId, record.apiKeyId, record.status, {
-      reconnectAttempts: record.reconnectAttempts,
-    }).catch((error) => {
-      logger.error({ error, sessionId: record.sessionId }, 'Reconnect exhaustion status update failed');
-    });
     logger.warn({ sessionId: record.sessionId, attempts: record.reconnectAttempts }, 'Session reconnect attempts exhausted');
+    abandonSession(record, 'reconnectAttemptsExhausted').catch((error) => {
+      logger.error({ error, sessionId: record.sessionId }, 'Reconnect exhaustion cleanup failed');
+    });
     return;
   }
 
@@ -693,4 +825,21 @@ export async function restoreConnectedSessions() {
       logger.error({ error, sessionId }, 'Failed to restore previously connected WhatsApp session');
     }
   }
+}
+
+export async function shutdownSessions() {
+  const records = [...sessions.values()];
+  sessions.clear();
+
+  await Promise.allSettled(records.map(async (record) => {
+    record.manualLogout = true;
+    clearTimeout(record.reconnectTimer);
+    clearTimeout(record.expireTimer);
+    record.reconnectTimer = null;
+    record.expireTimer = null;
+    notifyReady(record, new Error('WhatsApp gateway is shutting down'));
+    record.socket?.cancelPairingCode?.();
+    await record.socket?.end(new Error('WhatsApp gateway is shutting down'));
+    record.socket = null;
+  }));
 }

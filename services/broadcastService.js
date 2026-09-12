@@ -29,6 +29,9 @@ import {
 } from './whatsappService.js';
 
 const logger = pino().child({ service: 'broadcast-service' });
+export const MAX_BROADCAST_DURATION_MS = 60 * 60 * 1000;
+export const MAX_CONCURRENT_BROADCASTS = 5;
+let activeBroadcasts = 0;
 
 const dispatchers = {
   text: {
@@ -198,9 +201,34 @@ function wait(milliseconds) {
 }
 
 export function validateBroadcastContent(payload) {
+  const maximumDuration = Math.max(0, payload.targets.length - 1) * payload.delay.max;
+  if (maximumDuration > MAX_BROADCAST_DURATION_MS) {
+    throw new RangeError('Broadcast delay would exceed the maximum one-hour duration');
+  }
   for (const target of payload.targets) {
     prepareMessage(payload, target);
   }
+}
+
+export function tryStartBroadcast() {
+  if (activeBroadcasts >= MAX_CONCURRENT_BROADCASTS) {
+    return false;
+  }
+  activeBroadcasts += 1;
+  return true;
+}
+
+export function finishBroadcast() {
+  activeBroadcasts = Math.max(0, activeBroadcasts - 1);
+}
+
+export async function failPendingBroadcasts(reason = 'Gateway restarted before broadcast completion') {
+  await pool.execute(
+    `UPDATE broadcast_logs
+     SET status = 'failed', error_message = ?, sent_at = NULL
+     WHERE status = 'pending'`,
+    [reason],
+  );
 }
 
 export async function createBroadcast(payload, apiKeyId) {

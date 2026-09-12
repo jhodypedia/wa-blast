@@ -54,7 +54,10 @@ function createMessageHandler(schema, sendMessage) {
 
       const result = await sendMessage(socket, payload);
       if (!result.success) {
-        return failure(response, 502, result.error);
+        const status = result.code === 'WHATSAPP_OPERATION_TIMEOUT' ? 504 : 502;
+        return failure(response, status, status === 504
+          ? 'WhatsApp operation timed out'
+          : 'WhatsApp rejected the message operation');
       }
       return success(response, result);
     } catch (error) {

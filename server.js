@@ -13,10 +13,12 @@ import sessionRoutes from './routes/session.routes.js';
 import { startTelegramBot, stopTelegramBot } from './bot/index.js';
 import { apiKeyAuth } from './middlewares/apiKeyAuth.js';
 import { apiKeyRateLimiter } from './middlewares/rateLimiter.js';
-import { restoreConnectedSessions } from './services/sessionManager.js';
+import { failPendingBroadcasts } from './services/broadcastService.js';
+import { restoreConnectedSessions, shutdownSessions } from './services/sessionManager.js';
 
 const logger = pino();
 const app = express();
+const SHUTDOWN_TIMEOUT_MS = 15_000;
 const root = path.dirname(fileURLToPath(import.meta.url));
 const swaggerCustomCss = readFileSync(
   path.join(root, 'docs', 'swagger-custom.css'),
@@ -54,31 +56,81 @@ app.get('/health', async (_request, response) => {
   }
 });
 
-const server = app.listen(env.PORT, () => {
-  logger.info({ port: env.PORT }, 'WhatsApp Gateway API listening');
-});
-
-restoreConnectedSessions().catch((error) => {
-  logger.error({ error }, 'Failed to begin WhatsApp session restoration');
-});
-
+let server = null;
 let telegramBot = null;
-startTelegramBot()
-  .then((bot) => {
-    telegramBot = bot;
-  })
-  .catch((error) => {
-    logger.error({ error }, 'Telegram admin bot failed to start');
+let shutdownPromise = null;
+
+async function start() {
+  await checkDatabaseConnection();
+  await failPendingBroadcasts();
+  await restoreConnectedSessions();
+
+  server = app.listen(env.PORT, () => {
+    logger.info({ port: env.PORT }, 'WhatsApp Gateway API listening');
   });
 
-async function shutdown(signal) {
-  logger.info({ signal }, 'Shutting down');
-  server.close(async () => {
-    await stopTelegramBot(telegramBot);
-    await pool.end();
-    process.exit(0);
+  try {
+    telegramBot = await startTelegramBot();
+  } catch (error) {
+    logger.error({ error }, 'Telegram admin bot failed to start');
+  }
+}
+
+function closeHttpServer() {
+  if (!server) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
   });
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+function shutdown(signal) {
+  if (shutdownPromise) {
+    return shutdownPromise;
+  }
+
+  shutdownPromise = (async () => {
+    logger.info({ signal }, 'Shutting down');
+    const timeout = setTimeout(() => {
+      logger.error({ timeoutMs: SHUTDOWN_TIMEOUT_MS }, 'Graceful shutdown timed out');
+      server?.closeAllConnections?.();
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    timeout.unref();
+
+    try {
+      await closeHttpServer();
+      await Promise.allSettled([
+        shutdownSessions(),
+        stopTelegramBot(telegramBot),
+      ]);
+      await pool.end();
+    } finally {
+      clearTimeout(timeout);
+    }
+  })();
+
+  return shutdownPromise;
+}
+
+process.once('SIGINT', () => {
+  shutdown('SIGINT').catch((error) => {
+    logger.error({ error }, 'Shutdown failed');
+    process.exitCode = 1;
+  });
+});
+process.once('SIGTERM', () => {
+  shutdown('SIGTERM').catch((error) => {
+    logger.error({ error }, 'Shutdown failed');
+    process.exitCode = 1;
+  });
+});
+
+start().catch((error) => {
+  logger.fatal({ error }, 'WhatsApp Gateway API failed to start');
+  process.exitCode = 1;
+  shutdown('startup-failure').catch((shutdownError) => {
+    logger.error({ error: shutdownError }, 'Startup cleanup failed');
+  });
+});

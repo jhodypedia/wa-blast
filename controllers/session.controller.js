@@ -45,16 +45,50 @@ function sendError(response, error) {
   const upstreamStatus = typeof error === 'number'
     ? error
     : error?.output?.statusCode ?? error?.statusCode;
-  if (message.includes('Timed out') || upstreamStatus === 408) {
+
+  // requestPairingCode() (see sessionManager's classifyPairingError) rejects
+  // with these named cases before ever touching a socket-level status code,
+  // so match on message first for the ones that don't carry an HTTP status.
+  if (/rate-overlimit/i.test(message) || upstreamStatus === 429) {
+    logger.warn({ error }, 'WhatsApp pairing rate-limited');
+    return response.status(429).json({
+      error: 'Too many pairing attempts for this number. Wait before retrying - retrying immediately makes it worse.',
+    });
+  }
+  if (/not-allowed/i.test(message)) {
+    logger.warn({ error }, 'WhatsApp pairing not allowed for this account');
+    return response.status(422).json({
+      error: 'Link-by-phone-number is not enabled for this WhatsApp account.',
+    });
+  }
+  if (upstreamStatus === 409) {
+    logger.warn({ error }, 'WhatsApp pairing already pending');
+    return response.status(409).json({
+      error: 'A pairing code is already pending for this session. Wait for it to expire or request a new session.',
+      secondsLeft: error?.data?.secondsLeft,
+    });
+  }
+  if (/international format/i.test(message) || upstreamStatus === 400) {
+    return response.status(400).json({
+      error: 'Phone number must be in international format: country code followed by the national number, digits only.',
+    });
+  }
+  if (message.includes('Timed out')) {
     return response.status(504).json({ error: message || 'WhatsApp request timed out' });
   }
-  if (upstreamStatus === 401) {
+  if (upstreamStatus === 401 || upstreamStatus === 500) {
     logger.warn({ error }, 'WhatsApp rejected pairing session');
     return response.status(502).json({
       error: 'WhatsApp rejected the pairing session before a code could be generated. Verify the account can link companion devices, then retry.',
     });
   }
-  if (upstreamStatus === 428 || upstreamStatus === 503 || upstreamStatus === 1006) {
+  if (
+    upstreamStatus === 408
+    || upstreamStatus === 428
+    || upstreamStatus === 503
+    || upstreamStatus === 515
+    || upstreamStatus === 1006
+  ) {
     logger.warn({ error }, 'WhatsApp connection unavailable');
     return response.status(503).json({
       error: 'WhatsApp connection unavailable. Retry the session request.',
